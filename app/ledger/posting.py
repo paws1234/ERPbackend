@@ -35,6 +35,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import Mapped, Session, mapped_column, relationship
 
+from app.audit import append_only
 from app.db import Base
 
 # Amount scale: ISO 4217 minor units plus the precision unit costs and FX need.
@@ -173,6 +174,15 @@ CREATE CONSTRAINT TRIGGER journal_line_must_balance
 
 for _ddl in (_BALANCE_FUNCTION, _ENTRY_TRIGGER, _LINE_TRIGGER):
     event.listen(JournalLine.__table__, "after_create", _ddl)
+
+
+# --- The invariant, at the storage boundary: append-only ---------------------
+# T-0.AUDIT.01: a posting is history, so the database refuses to change or remove
+# one — the deferred balance triggers above judge a *new* set of lines, these
+# refuse a rewrite of an existing one. Registered here because this module owns
+# the two tables; the convention itself lives in app/audit.py.
+for _table in (JournalEntry.__table__, JournalLine.__table__):
+    append_only(_table)
 
 
 # --- The invariant, at the caller's side ------------------------------------

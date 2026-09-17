@@ -14,11 +14,17 @@ import uuid
 from sqlalchemy import CheckConstraint, SmallInteger, String, Uuid
 from sqlalchemy.orm import Mapped, mapped_column
 
+from app.audit import SoftDeleteMixin, deny_hard_delete
 from app.db import Base
 
 
-class Company(Base):
-    """One legal entity: the company that owns every other row in the schema."""
+class Company(SoftDeleteMixin, Base):
+    """One legal entity: the company that owns every other row in the schema.
+
+    A master, so it follows the T-0.AUDIT.01 convention: retiring it marks
+    ``deleted_at`` and the row stays for the postings filed under it — the
+    database refuses to delete it.
+    """
 
     __tablename__ = "company"
     __table_args__ = (
@@ -42,3 +48,8 @@ class Company(Base):
     # per-company periods. Upgrade path: derive them from this month when
     # T-1.ACCT.* builds the monthly period lock.
     fiscal_year_start_month: Mapped[int] = mapped_column(SmallInteger, nullable=False)
+
+
+# Part of the master convention (T-0.AUDIT.01), registered here because this
+# module owns the table: a company is retired by marking it, never by deleting it.
+deny_hard_delete(Company.__table__)

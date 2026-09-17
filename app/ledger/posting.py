@@ -54,9 +54,11 @@ class JournalEntry(Base):
     __tablename__ = "journal_entry"
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
-    # Owning company. `company_id` is the scoping dimension on every posting
-    # (T-0.CORE.03 owns the company master and adds the foreign key).
-    company_id: Mapped[uuid.UUID] = mapped_column(Uuid, nullable=False, index=True)
+    # Owning company — the scoping dimension on every posting, isolated by the
+    # row-level security app/db.py puts on this table (T-0.CORE.03).
+    company_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("company.id"), nullable=False, index=True
+    )
     posting_date: Mapped[date] = mapped_column(Date, nullable=False)
     # Currency the lines are stated in; conversion to the base currency is
     # T-1.ACCT.05 and stores the rate, not the caller.

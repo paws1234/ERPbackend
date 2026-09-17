@@ -28,6 +28,7 @@ from sqlalchemy.orm import Session
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from app.company import Company  # noqa: E402
 from app.db import Base  # noqa: E402
 from app.ledger.posting import (  # noqa: E402
     JournalEntry,
@@ -68,8 +69,24 @@ def main() -> int:
         return 2
 
     engine = create_engine(url)
-    Base.metadata.drop_all(engine, tables=[JournalLine.__table__, JournalEntry.__table__])
+    Base.metadata.drop_all(
+        engine,
+        tables=[JournalLine.__table__, JournalEntry.__table__, Company.__table__],
+    )
     Base.metadata.create_all(engine)
+    # The ledger references the company master now (T-0.CORE.03), so this check
+    # posts for a real company.
+    with Session(engine) as session:
+        session.add(
+            Company(
+                id=COMPANY,
+                code="POSTING-CHECK",
+                name="Posting invariant check",
+                base_currency="PHP",
+                fiscal_year_start_month=1,
+            )
+        )
+        session.commit()
 
     with Session(engine) as session:
         # 1 — a balanced set persists

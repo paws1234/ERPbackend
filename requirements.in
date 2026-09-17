@@ -1,0 +1,7 @@
+# The backend's direct dependencies. The resolved, pinned set lives in
+# requirements.lock, which is what the image installs — this file only says what
+# the application asks for.
+fastapi
+uvicorn
+sqlalchemy>=2
+psycopg[binary]

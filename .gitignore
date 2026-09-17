@@ -1,0 +1,11 @@
+# Python build and cache artifacts.
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Configuration and secrets: the image takes everything from the environment,
+# and no repository here ever holds a credential (all three remotes are public).
+.env
+.env.*
+*.pem

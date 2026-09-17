@@ -1,0 +1,8 @@
+# What the pipeline's checks need on top of the application's own set.
+#
+# The image installs requirements.lock alone (T-0.DEPLOY.01); this file adds the
+# one dependency the checks use and the application does not: httpx, which
+# fastapi's TestClient drives for the API-level checks (T-0.API.01, T-0.SEC.01).
+# Resolved into requirements-dev.lock, which is what CI installs.
+-r requirements.lock
+httpx

@@ -1,0 +1,147 @@
+# T-0.CICD.01 — the backend repository's own pipeline.
+#
+# Three jobs, in this order:
+#
+#   checks   the T-0.CORE.02 layers on every change — unit and integration, then
+#            the ledger-integrity gate last, which is the order TESTING.md states
+#            (a failure in a lower layer makes the later ones meaningless)
+#   publish  the image T-0.DEPLOY.01 builds, pushed to the registry decided for
+#            this project and tagged with the commit — only if the checks passed
+#   deploy   on demand: the published image, brought up against a real database
+#            by this repository's own compose file (T-0.DEPLOY.03)
+#
+# Nothing here needs the frontend repository or any other sibling checkout: the
+# repositories are separate (T-0.STACK.01, §7.5) and this pipeline runs from this
+# one alone, consuming the image it just built.
+
+name: backend
+
+on:
+  # Every push, on every branch: a branch push is a change, and the layers are
+  # what a change must pass. Publishing stays on `main` (below), not here.
+  push:
+  pull_request:
+  workflow_dispatch:
+
+# Least privilege by default; `publish` asks for the one extra it needs.
+permissions:
+  contents: read
+
+env:
+  # `container_registry` — decided 2026-09-18: GitHub's registry, namespace
+  # paws1234, public packages. Read from here by the stack (T-0.DEPLOY.03) too.
+  IMAGE: ghcr.io/paws1234/erpv1-backend
+
+jobs:
+  checks:
+    name: checks (unit · integration · ledger integrity)
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 2s
+          --health-timeout 3s
+          --health-retries 30
+    env:
+      # A scratch database, as TESTING.md's command line describes. Each check
+      # resets the schema it uses, so every one starts from a clean database.
+      DATABASE_URL: postgresql+psycopg://postgres:postgres@127.0.0.1:5432/postgres
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install the pinned dependencies
+        run: pip install -r requirements-dev.lock
+
+      # Every `tests/check_*.py` is a layer of T-0.CORE.02 and runs on every
+      # change. The loop is on purpose: a check that lands tomorrow is wired in
+      # without editing this file, so "a change runs the layers" stays true as
+      # the phases add them. Two are excluded, each for a reason:
+      #
+      #   check_backend_image.py  builds and inspects the image; the `publish`
+      #                           job below builds it for real
+      #   check_compose_stack.py  needs BOTH repositories' images, and this
+      #                           pipeline must never need its sibling
+      #
+      # The gate is excluded here because it is the next step, after these.
+      - name: Unit and integration checks
+        run: |
+          set -euo pipefail
+          for check in tests/check_*.py; do
+            case "$check" in
+              tests/check_backend_image.py|tests/check_compose_stack.py) continue ;;
+              tests/check_ledger_integrity.py) continue ;;
+            esac
+            echo "::group::$check"
+            python "$check"
+            echo "::endgroup::"
+          done
+
+      # The gate: §6 metric 1 over the stored ledger — every persisted posting
+      # balances and has at least two lines. It scans the tables, not responses,
+      # and it proves it can fail before it reports success.
+      - name: Ledger-integrity gate
+        run: python tests/check_ledger_integrity.py
+
+  publish:
+    name: publish the image
+    needs: checks
+    # `main`, or a manual run — never a pull request. A failing check fails this
+    # job's need, so a red run publishes nothing.
+    if: >-
+      (github.event_name == 'push' && github.ref == 'refs/heads/main')
+      || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Log in to the registry
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+
+      # Tagged with the commit, so a stack can pull exactly the revision it was
+      # built from (T-0.DEPLOY.03 reads it from BACKEND_IMAGE).
+      - name: Build and push the image
+        run: |
+          set -euo pipefail
+          docker build --tag "$IMAGE:${GITHUB_SHA}" .
+          docker push "$IMAGE:${GITHUB_SHA}"
+
+  deploy:
+    name: deploy the published image (on demand)
+    needs: publish
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Reproducible: the compose file and a published image, nothing else. It
+      # runs from a temporary directory that holds no source, which is the same
+      # property T-0.DEPLOY.03's check proves for the stack.
+      - name: Bring the stack up from the published image
+        env:
+          POSTGRES_PASSWORD: ci-deploy-password
+        run: |
+          set -euo pipefail
+          # $IMAGE comes from the workflow's own environment; the tag is the
+          # commit the `publish` job just pushed.
+          export BACKEND_IMAGE="$IMAGE:$GITHUB_SHA"
+          workdir="$(mktemp -d)"
+          cp docker-compose.yml "$workdir/"
+          cd "$workdir"
+          # The backend service only: its dependency is the database, and the
+          # frontend image belongs to the other repository's pipeline.
+          docker compose up -d --wait backend
+          docker compose ps

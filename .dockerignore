@@ -1,0 +1,16 @@
+# The build context: the application and its lock, nothing else. A `.env` or a
+# local secret cannot be copied in because it is not in the context at all.
+.git
+.github
+__pycache__
+*.pyc
+*.pyo
+.env
+.env.*
+*.md
+tests
+tools
+contract
+.pytest_cache
+.mypy_cache
+.ruff_cache

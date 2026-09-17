@@ -1,0 +1,86 @@
+# T-0.DEPLOY.03 — the stack: database, backend and frontend as three containers.
+#
+#   POSTGRES_PASSWORD=... docker compose up -d
+#
+# The applications are consumed as **images** (`BACKEND_IMAGE` / `FRONTEND_IMAGE`
+# choose which), so bringing the stack up needs neither application repository
+# checked out — only this file. For local builds use the development override:
+#
+#   docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --build
+#
+# Two networks, on purpose: the frontend reaches the backend over `edge`, and
+# only the backend reaches the database over `data`. The frontend having no route
+# to the database is a delivery rule (API-first), so it is enforced by the network
+# rather than by convention.
+name: erpv1
+
+services:
+  db:
+    image: postgres:16
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-erpv1}
+      POSTGRES_USER: ${POSTGRES_USER:-erpv1}
+      # No default: a stack must be given its password, not inherit one.
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
+    volumes:
+      - db-data:/var/lib/postgresql/data
+    networks: [data]
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  backend:
+    image: ${BACKEND_IMAGE:-erpv1-backend:local}
+    environment:
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-erpv1}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-erpv1}
+    depends_on:
+      # The backend waits for a database that answers, not merely one that started.
+      db:
+        condition: service_healthy
+    networks: [data, edge]
+    restart: unless-stopped
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/v1/health', timeout=2)"
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  frontend:
+    image: ${FRONTEND_IMAGE:-erpv1-frontend:local}
+    environment:
+      # Read at start, so one image runs against any backend without a rebuild.
+      API_BASE_URL: http://backend:8000
+      COMPANY_ID: ${COMPANY_ID:-}
+      ACTOR: ${ACTOR:-shell}
+    depends_on:
+      backend:
+        condition: service_healthy
+    networks: [edge]
+    ports:
+      - "${FRONTEND_PORT:-3000}:3000"
+    restart: unless-stopped
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - "fetch('http://127.0.0.1:3000/').then((r) => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+networks:
+  # The frontend and the backend.
+  edge:
+  # The backend and the database — the frontend is not on it.
+  data:
+
+volumes:
+  db-data:

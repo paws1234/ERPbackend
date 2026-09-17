@@ -49,6 +49,11 @@ GLOBAL_TABLES = {
 # table -> (parent table, the child's foreign key column, the parent's key column)
 CHILD_TABLES = {
     "journal_line": ("journal_entry", "entry_id", "id"),
+    "party_role": ("party", "party_id", "id"),
+    "approval_level": ("approval_workflow", "workflow_id", "id"),
+    "approval_decision": ("approval_request", "request_id", "id"),
+    "permission": ("role", "role_id", "id"),
+    "field_permission": ("role", "role_id", "id"),
 }
 
 

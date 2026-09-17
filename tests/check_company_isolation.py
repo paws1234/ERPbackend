@@ -100,7 +100,12 @@ def main() -> int:
         return 2
 
     engine = create_engine(url)
-    Base.metadata.drop_all(engine)
+    # The checks share one scratch database, so reset the schema rather than only
+    # the tables this file imports: a table another module added keeps a foreign
+    # key on `company` and would block the rebuild.
+    with engine.begin() as connection:
+        connection.exec_driver_sql("DROP SCHEMA public CASCADE")
+        connection.exec_driver_sql("CREATE SCHEMA public")
     Base.metadata.create_all(engine)  # creates the schema *and* its scoping
 
     # 2 — a table without the company dimension never reaches the database

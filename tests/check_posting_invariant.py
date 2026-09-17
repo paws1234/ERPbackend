@@ -69,10 +69,12 @@ def main() -> int:
         return 2
 
     engine = create_engine(url)
-    Base.metadata.drop_all(
-        engine,
-        tables=[JournalLine.__table__, JournalEntry.__table__, Company.__table__],
-    )
+    # The checks share one scratch database, so reset the schema rather than only
+    # the tables this file imports: a table another module added keeps a foreign
+    # key on `company` and would block the rebuild.
+    with engine.begin() as connection:
+        connection.exec_driver_sql("DROP SCHEMA public CASCADE")
+        connection.exec_driver_sql("CREATE SCHEMA public")
     Base.metadata.create_all(engine)
     # The ledger references the company master now (T-0.CORE.03), so this check
     # posts for a real company.

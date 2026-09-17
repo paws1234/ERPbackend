@@ -1,0 +1,20 @@
+# T-0.DEPLOY.03 — development override: build the images locally instead of
+# pulling them.
+#
+#   docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --build
+#
+# This file reaches for the sibling checkout, and that is the one thing it is for:
+# local development. The published stack uses images and needs no repository at
+# all.
+services:
+  backend:
+    image: erpv1-backend:local
+    build:
+      context: .
+      dockerfile: Dockerfile
+
+  frontend:
+    image: erpv1-frontend:local
+    build:
+      context: ../ERPfrontend
+      dockerfile: Dockerfile

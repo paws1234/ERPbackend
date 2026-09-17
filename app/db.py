@@ -50,6 +50,8 @@ GLOBAL_TABLES = {
 CHILD_TABLES = {
     "journal_line": ("journal_entry", "entry_id", "id"),
     "party_role": ("party", "party_id", "id"),
+    "approval_level": ("approval_workflow", "workflow_id", "id"),
+    "approval_decision": ("approval_request", "request_id", "id"),
 }
 
 

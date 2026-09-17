@@ -40,6 +40,7 @@ from app.api import API_VERSION, BASE, app  # noqa: E402
 from app.company import Company  # noqa: E402
 from app.db import Base  # noqa: E402
 from app.ledger import posting  # noqa: E402,F401 — every check builds the one schema
+from app.security import assign, define_role, grant  # noqa: E402
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 CURRENT_DAY = "2026-09-17"
@@ -110,6 +111,12 @@ def main() -> int:
                 fiscal_year_start_month=1,
             )
         )
+        session.commit()
+        # The caller needs the capabilities T-0.SEC.01 enforces at the boundary;
+        # without them every request in this check would be refused as forbidden.
+        role = define_role(session, company_id=company_id, code="api-check", name="API check")
+        grant(session, role, "company.read", "journal.read", "journal.post")
+        assign(session, company_id=company_id, subject="alice", role=role)
         session.commit()
 
     client = TestClient(app, raise_server_exceptions=False)

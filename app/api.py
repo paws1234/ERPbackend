@@ -72,6 +72,12 @@ from app.ledger.posting import (
     UnbalancedEntryError,
     post_journal_entry,
 )
+from app.security import (
+    AccessDenied,
+    readable_fields,
+    reject_restricted_fields,
+    require,
+)
 
 # The published version. A breaking change means a new value here, a new
 # `contract/<version>/` directory and the old one left exactly as it was.
@@ -302,6 +308,27 @@ def _entry_out(entry: JournalEntry) -> JournalEntryOut:
     )
 
 
+def _visible_entry(session: Session, context: RequestContext, payload: dict) -> dict:
+    """An entry as *this* caller may read it: a restricted line field is absent.
+
+    The body itself is whole; what a caller sees of it is decided per request
+    (T-0.SEC.01), so a replayed answer is filtered like a fresh one.
+    """
+    return {
+        **payload,
+        "lines": [
+            readable_fields(
+                session,
+                company_id=context.company_id,
+                subject=context.actor,
+                entity="journal_line",
+                payload=line,
+            )
+            for line in payload["lines"]
+        ],
+    }
+
+
 _ENGINE = None
 
 
@@ -355,6 +382,12 @@ async def _http_error(_request: Request, exc: StarletteHTTPException) -> JSONRes
     return _error(exc.status_code, code, str(exc.detail))
 
 
+@app.exception_handler(AccessDenied)
+async def _access_denied(_request: Request, exc: AccessDenied) -> JSONResponse:
+    # T-0.SEC.01 refused it at the boundary; the refusal is already on the trail.
+    return _error(403, exc.code, str(exc))
+
+
 @app.exception_handler(Exception)
 async def _unexpected(_request: Request, exc: Exception) -> JSONResponse:
     # Registered so even a bug answers in the one shape; a client's error
@@ -371,6 +404,14 @@ def health() -> HealthOut:
 @app.get(f"{BASE}/companies/current", response_model=CompanyOut, tags=["platform"])
 def current_company(context: Context) -> CompanyOut:
     """The company the request is bound to — what the frontend shell reads first."""
+    require(
+        context.session,
+        company_id=context.company_id,
+        subject=context.actor,
+        capability="company.read",
+        entity="company",
+        entity_id=context.company_id,
+    )
     company = context.session.get(Company, context.company_id)
     if company is None:
         raise ApiError(404, "company_not_found", f"no company {context.company_id}")
@@ -396,6 +437,21 @@ def post_entry(
 ) -> JSONResponse:
     """Post one balanced journal entry — retry-safe by its idempotency key."""
     session = context.session
+    require(
+        session,
+        company_id=context.company_id,
+        subject=context.actor,
+        capability="journal.post",
+        entity="journal_entry",
+    )
+    for line in payload.lines:
+        reject_restricted_fields(
+            session,
+            company_id=context.company_id,
+            subject=context.actor,
+            entity="journal_line",
+            payload=line.model_dump(),
+        )
     fingerprint = _fingerprint(payload.model_dump(mode="json"))
     path = f"{BASE}/journal-entries"
 
@@ -412,9 +468,12 @@ def post_entry(
                 "idempotency_key_reused",
                 f"key {idempotency_key!r} was used for a different body",
             )
+        # The retry gets the first answer, marked as a replay, and nothing is
+        # posted a second time. The stored body is the whole record; what this
+        # caller may see of it is decided per request, below.
         return JSONResponse(
             status_code=seen.status_code,
-            content=json.loads(seen.body),
+            content=_visible_entry(session, context, json.loads(seen.body)),
             headers={"Idempotent-Replay": "true"},
         )
 
@@ -451,7 +510,7 @@ def post_entry(
         )
     )
     session.commit()
-    return JSONResponse(status_code=201, content=body)
+    return JSONResponse(status_code=201, content=_visible_entry(session, context, body))
 
 
 @app.get(f"{BASE}/journal-entries", response_model=PageOut, tags=["ledger"])
@@ -462,6 +521,13 @@ def list_entries(
 ) -> PageOut:
     """One page of the company's ledger, in posting order."""
     session = context.session
+    require(
+        session,
+        company_id=context.company_id,
+        subject=context.actor,
+        capability="journal.read",
+        entity="journal_entry",
+    )
     total = session.scalar(
         select(func.count()).select_from(JournalEntry).where(
             JournalEntry.company_id == context.company_id
@@ -474,9 +540,12 @@ def list_entries(
         .limit(limit)
         .offset(offset)
     ).all()
-    return PageOut(
+    page = PageOut(
         items=[_entry_out(entry) for entry in entries],
         limit=limit,
         offset=offset,
         total=total or 0,
     )
+    payload = page.model_dump(mode="json")
+    payload["items"] = [_visible_entry(session, context, item) for item in payload["items"]]
+    return JSONResponse(status_code=200, content=payload)

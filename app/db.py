@@ -52,6 +52,8 @@ CHILD_TABLES = {
     "party_role": ("party", "party_id", "id"),
     "approval_level": ("approval_workflow", "workflow_id", "id"),
     "approval_decision": ("approval_request", "request_id", "id"),
+    "permission": ("role", "role_id", "id"),
+    "field_permission": ("role", "role_id", "id"),
 }
 
 

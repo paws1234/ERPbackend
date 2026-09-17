@@ -143,5 +143,8 @@ jobs:
           cd "$workdir"
           # The backend service only: its dependency is the database, and the
           # frontend image belongs to the other repository's pipeline.
+          # ponytail: the ceiling is a backend-only smoke deploy — the frontend
+          # service is not exercised from here. Upgrade when a full-stack deploy is
+          # wanted: set FRONTEND_IMAGE to that repository's published tag.
           docker compose up -d --wait backend
           docker compose ps

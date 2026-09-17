@@ -1,0 +1,328 @@
+{
+  "market": "philippines",
+  "country": "PH",
+  "version": "1.0.0",
+  "currency": "PHP",
+  "as_of": "2026-09-17",
+  "notes": [
+    "Statutory rates are data, not law: they are the pack's stated version and every deployment confirms them with its accountant before use.",
+    "Movable observances (Chinese New Year, Eid'l Fitr, Eid'l Adha) are proclaimed year by year and are added by proclamation, not guessed here.",
+    "The fiscal year start is deliberately null: plan §8 leaves it undecided, so it must be confirmed with the pack before a company in this market is created."
+  ],
+  "fiscal_year_start": null,
+  "coa_template": {
+    "name": "Philippines — Standard Chart of Accounts (v1)",
+    "basis": "Five classes as §2.1 names them, with control accounts for the ledgers the modules post to.",
+    "accounts": [
+      { "code": "1000", "name": "Cash on Hand", "class": "asset", "type": "control" },
+      { "code": "1010", "name": "Cash in Bank", "class": "asset", "type": "control" },
+      { "code": "1020", "name": "Petty Cash", "class": "asset", "parent": "1010" },
+      { "code": "1100", "name": "Accounts Receivable", "class": "asset", "type": "control" },
+      { "code": "1110", "name": "Allowance for Doubtful Accounts", "class": "asset", "parent": "1100" },
+      { "code": "1200", "name": "Inventory", "class": "asset", "type": "control" },
+      { "code": "1210", "name": "Inventory — Raw Materials", "class": "asset", "parent": "1200" },
+      { "code": "1220", "name": "Inventory — Work in Process", "class": "asset", "parent": "1200" },
+      { "code": "1230", "name": "Inventory — Finished Goods", "class": "asset", "parent": "1200" },
+      { "code": "1300", "name": "Prepaid Expenses", "class": "asset" },
+      { "code": "1310", "name": "Input VAT", "class": "asset", "type": "control" },
+      { "code": "1400", "name": "Advances to Suppliers", "class": "asset" },
+      { "code": "1500", "name": "Property, Plant and Equipment", "class": "asset" },
+      { "code": "1510", "name": "Accumulated Depreciation", "class": "asset", "parent": "1500" },
+      { "code": "1600", "name": "Right-of-Use Assets", "class": "asset" },
+      { "code": "2000", "name": "Accounts Payable", "class": "liability", "type": "control" },
+      { "code": "2010", "name": "Goods Received Not Invoiced", "class": "liability", "parent": "2000" },
+      { "code": "2100", "name": "Accrued Liabilities", "class": "liability" },
+      { "code": "2110", "name": "Accrued Payroll", "class": "liability", "parent": "2100" },
+      { "code": "2200", "name": "Output VAT Payable", "class": "liability", "type": "control" },
+      { "code": "2210", "name": "VAT Payable", "class": "liability", "parent": "2200" },
+      { "code": "2300", "name": "Withholding Tax Payable", "class": "liability", "type": "control" },
+      { "code": "2310", "name": "Withholding Tax on Compensation Payable", "class": "liability", "parent": "2300" },
+      { "code": "2320", "name": "Expanded Withholding Tax Payable", "class": "liability", "parent": "2300" },
+      { "code": "2400", "name": "Statutory Contributions Payable", "class": "liability", "type": "control" },
+      { "code": "2410", "name": "SSS Contributions Payable", "class": "liability", "parent": "2400" },
+      { "code": "2420", "name": "PhilHealth Contributions Payable", "class": "liability", "parent": "2400" },
+      { "code": "2430", "name": "Pag-IBIG Contributions Payable", "class": "liability", "parent": "2400" },
+      { "code": "2500", "name": "Loans Payable", "class": "liability" },
+      { "code": "2600", "name": "Lease Liabilities", "class": "liability" },
+      { "code": "3000", "name": "Capital Stock", "class": "equity" },
+      { "code": "3100", "name": "Retained Earnings", "class": "equity" },
+      { "code": "3200", "name": "Current Year Earnings", "class": "equity" },
+      { "code": "3900", "name": "Foreign Currency Translation Reserve", "class": "equity" },
+      { "code": "4000", "name": "Sales Revenue", "class": "income" },
+      { "code": "4010", "name": "Sales — Zero-Rated", "class": "income", "parent": "4000" },
+      { "code": "4020", "name": "Sales Discounts", "class": "income", "parent": "4000" },
+      { "code": "4100", "name": "Service Revenue", "class": "income" },
+      { "code": "4200", "name": "Production Variances", "class": "income" },
+      { "code": "4900", "name": "Other Income", "class": "income" },
+      { "code": "4910", "name": "Foreign Exchange Gain", "class": "income", "parent": "4900" },
+      { "code": "5000", "name": "Cost of Goods Sold", "class": "expense" },
+      { "code": "5010", "name": "Purchase Price Variance", "class": "expense", "parent": "5000" },
+      { "code": "5100", "name": "Salaries and Wages", "class": "expense" },
+      { "code": "5110", "name": "Overtime Premium", "class": "expense", "parent": "5100" },
+      { "code": "5120", "name": "Employer Statutory Contributions", "class": "expense", "parent": "5100" },
+      { "code": "5130", "name": "13th Month Pay and Bonuses", "class": "expense", "parent": "5100" },
+      { "code": "5200", "name": "Rent Expense", "class": "expense" },
+      { "code": "5300", "name": "Utilities Expense", "class": "expense" },
+      { "code": "5400", "name": "Depreciation Expense", "class": "expense" },
+      { "code": "5500", "name": "Taxes and Licenses", "class": "expense" },
+      { "code": "5510", "name": "Percentage Tax", "class": "expense", "parent": "5500" },
+      { "code": "5600", "name": "Professional and Audit Fees", "class": "expense" },
+      { "code": "5700", "name": "Freight and Handling", "class": "expense" },
+      { "code": "5800", "name": "Repairs and Maintenance", "class": "expense" },
+      { "code": "5900", "name": "Inventory Shrinkage and Adjustments", "class": "expense" },
+      { "code": "5990", "name": "Foreign Exchange Loss", "class": "expense" },
+      { "code": "6000", "name": "Income Tax Expense", "class": "expense" }
+    ]
+  },
+  "tax_rules": [
+    {
+      "code": "VAT-OUT-12",
+      "name": "Value-added tax on sales of goods and services",
+      "rate_percent": 12,
+      "applies_to": ["sales_invoice", "sales_order", "pos_sale"],
+      "account": "2200",
+      "source": "National Internal Revenue Code, Title IV, as amended; rate stated for this pack version — confirm with the pack"
+    },
+    {
+      "code": "VAT-IN-12",
+      "name": "Input value-added tax on purchases",
+      "rate_percent": 12,
+      "applies_to": ["purchase_order", "goods_receipt", "supplier_invoice"],
+      "account": "1310",
+      "source": "National Internal Revenue Code, Title IV, as amended; rate stated for this pack version — confirm with the pack"
+    },
+    {
+      "code": "VAT-ZERO",
+      "name": "Zero-rated sales (export and other zero-rated transactions)",
+      "rate_percent": 0,
+      "applies_to": ["sales_invoice"],
+      "account": "4010",
+      "source": "Zero-rated transactions; requires BIR registration of the zero rating before use"
+    },
+    {
+      "code": "VAT-EXEMPT",
+      "name": "VAT-exempt sales and purchases",
+      "rate_percent": 0,
+      "applies_to": ["sales_invoice", "supplier_invoice"],
+      "source": "Exempt transactions; the pack states the rate, the module applies the classification"
+    },
+    {
+      "code": "EWT-GOODS-1",
+      "name": "Expanded withholding tax — purchase of goods",
+      "rate_percent": 1,
+      "applies_to": ["supplier_invoice", "payment"],
+      "account": "2320",
+      "source": "Expanded withholding tax schedule as stated for this pack version — confirm with the pack"
+    },
+    {
+      "code": "EWT-SERVICES-2",
+      "name": "Expanded withholding tax — purchase of services",
+      "rate_percent": 2,
+      "applies_to": ["supplier_invoice", "payment"],
+      "account": "2320",
+      "source": "Expanded withholding tax schedule as stated for this pack version — confirm with the pack"
+    },
+    {
+      "code": "GOVT-FINAL-5",
+      "name": "Final withholding VAT on payments to government",
+      "rate_percent": 5,
+      "applies_to": ["payment"],
+      "account": "2320",
+      "source": "Final withholding VAT on government money payments; confirm with the pack"
+    }
+  ],
+  "statutory_rules": [
+    {
+      "code": "SSS-EE",
+      "name": "SSS employee contribution",
+      "kind": "contribution",
+      "rate_percent": 5,
+      "basis": "monthly salary credit, banded by the current contribution schedule",
+      "schedule": "monthly, remitted with the employer share",
+      "account": "2410",
+      "employer_rule": "SSS-ER",
+      "source": "Social Security Act schedule as stated for this pack version — confirm with the pack"
+    },
+    {
+      "code": "SSS-ER",
+      "name": "SSS employer contribution",
+      "kind": "contribution",
+      "rate_percent": 10,
+      "basis": "monthly salary credit, banded by the current contribution schedule",
+      "schedule": "monthly, remitted with the employee share",
+      "account": "5120",
+      "source": "Social Security Act schedule as stated for this pack version — confirm with the pack"
+    },
+    {
+      "code": "PHIC-EE",
+      "name": "PhilHealth employee contribution",
+      "kind": "contribution",
+      "rate_percent": 2.5,
+      "basis": "monthly basic salary, within the ceiling and floor in force",
+      "schedule": "monthly",
+      "account": "2420",
+      "employer_rule": "PHIC-ER",
+      "source": "Universal Health Care Act schedule as stated for this pack version — confirm with the pack"
+    },
+    {
+      "code": "PHIC-ER",
+      "name": "PhilHealth employer contribution",
+      "kind": "contribution",
+      "rate_percent": 2.5,
+      "basis": "monthly basic salary, within the ceiling and floor in force",
+      "schedule": "monthly",
+      "account": "5120",
+      "source": "Universal Health Care Act schedule as stated for this pack version — confirm with the pack"
+    },
+    {
+      "code": "HDMF-EE",
+      "name": "Pag-IBIG employee contribution",
+      "kind": "contribution",
+      "rate_percent": 2,
+      "basis": "monthly compensation, capped by the fund's ceiling",
+      "schedule": "monthly",
+      "account": "2430",
+      "employer_rule": "HDMF-ER",
+      "source": "Pag-IBIG Fund rules as stated for this pack version — confirm with the pack"
+    },
+    {
+      "code": "HDMF-ER",
+      "name": "Pag-IBIG employer contribution",
+      "kind": "contribution",
+      "rate_percent": 2,
+      "basis": "monthly compensation, capped by the fund's ceiling",
+      "schedule": "monthly",
+      "account": "5120",
+      "source": "Pag-IBIG Fund rules as stated for this pack version — confirm with the pack"
+    },
+    {
+      "code": "WHT-COMP",
+      "name": "Withholding tax on compensation",
+      "kind": "withholding",
+      "rate_percent": 0,
+      "basis": "graduated compensation table — the pack carries the schedules, not a single rate",
+      "schedule": "monthly remittance; annualisation at year end",
+      "account": "2310",
+      "source": "BIR graduated rates for compensation as stated for this pack version — confirm with the pack"
+    },
+    {
+      "code": "WHT-COMP-13TH",
+      "name": "Withholding on 13th month pay and other benefits",
+      "kind": "withholding",
+      "rate_percent": 0,
+      "basis": "amount above the exempt ceiling for 13th month pay and other benefits",
+      "schedule": "with the period the benefit is paid",
+      "account": "2310",
+      "source": "Exempt ceiling for 13th month pay and other benefits as stated for this pack version — confirm with the pack"
+    },
+    {
+      "code": "LOAN-EE",
+      "name": "Employee loans and advances recovery",
+      "kind": "loan",
+      "rate_percent": 0,
+      "basis": "outstanding balance, within the recovery limit the company sets",
+      "schedule": "per payroll run, after statutory deductions",
+      "account": "2500",
+      "source": "Company policy; the pack names the deduction so payroll has one place to look"
+    }
+  ],
+  "statutory_reports": [
+    {
+      "form": "2550M",
+      "authority": "BIR",
+      "name": "Monthly Value-Added Tax Declaration",
+      "frequency": "monthly",
+      "covers": "output VAT, input VAT, VAT payable"
+    },
+    {
+      "form": "2550Q",
+      "authority": "BIR",
+      "name": "Quarterly Value-Added Tax Return",
+      "frequency": "quarterly",
+      "covers": "output VAT, input VAT, VAT payable"
+    },
+    {
+      "form": "1601-C",
+      "authority": "BIR",
+      "name": "Monthly Remittance Return of Income Taxes Withheld on Compensation",
+      "frequency": "monthly",
+      "covers": "withholding tax on compensation"
+    },
+    {
+      "form": "1601-EQ",
+      "authority": "BIR",
+      "name": "Quarterly Remittance Return of Creditable Income Taxes Withheld (Expanded)",
+      "frequency": "quarterly",
+      "covers": "expanded withholding tax on purchases"
+    },
+    {
+      "form": "1604-C",
+      "authority": "BIR",
+      "name": "Annual Information Return of Income Taxes Withheld on Compensation",
+      "frequency": "annual",
+      "covers": "withholding tax on compensation, with the alphalist"
+    },
+    {
+      "form": "2316",
+      "authority": "BIR",
+      "name": "Certificate of Compensation Payment / Tax Withheld",
+      "frequency": "annual",
+      "covers": "per-employee compensation and tax withheld"
+    },
+    {
+      "form": "R-3",
+      "authority": "SSS",
+      "name": "Contribution Collection List",
+      "frequency": "monthly",
+      "covers": "SSS employee and employer contributions"
+    },
+    {
+      "form": "RF-1",
+      "authority": "PhilHealth",
+      "name": "Employer Remittance Report",
+      "frequency": "monthly",
+      "covers": "PhilHealth employee and employer contributions"
+    },
+    {
+      "form": "MCRF",
+      "authority": "Pag-IBIG",
+      "name": "Monthly Contribution Remittance Form",
+      "frequency": "monthly",
+      "covers": "Pag-IBIG employee and employer contributions"
+    }
+  ],
+  "holidays": [
+    { "date": "2026-01-01", "name": "New Year's Day", "type": "regular" },
+    { "date": "2026-02-25", "name": "EDSA People Power Revolution Anniversary", "type": "special" },
+    { "date": "2026-04-02", "name": "Maundy Thursday", "type": "regular" },
+    { "date": "2026-04-03", "name": "Good Friday", "type": "regular" },
+    { "date": "2026-04-09", "name": "Araw ng Kagitingan", "type": "regular" },
+    { "date": "2026-05-01", "name": "Labor Day", "type": "regular" },
+    { "date": "2026-06-12", "name": "Independence Day", "type": "regular" },
+    { "date": "2026-08-21", "name": "Ninoy Aquino Day", "type": "special" },
+    { "date": "2026-08-31", "name": "National Heroes Day", "type": "regular" },
+    { "date": "2026-11-01", "name": "All Saints' Day", "type": "special" },
+    { "date": "2026-11-30", "name": "Bonifacio Day", "type": "regular" },
+    { "date": "2026-12-08", "name": "Feast of the Immaculate Conception of Mary", "type": "special" },
+    { "date": "2026-12-24", "name": "Christmas Eve", "type": "special" },
+    { "date": "2026-12-25", "name": "Christmas Day", "type": "regular" },
+    { "date": "2026-12-30", "name": "Rizal Day", "type": "regular" },
+    { "date": "2026-12-31", "name": "Last Day of the Year", "type": "special" }
+  ],
+  "bank_file_format": {
+    "name": "Philippines — bank transfer file (comma-separated, credited via PESONet or InstaPay)",
+    "delimiter": ",",
+    "encoding": "utf-8",
+    "columns": [
+      { "name": "payee_name", "required": true, "note": "as registered with the receiving bank" },
+      { "name": "payee_account", "required": true, "note": "account number, digits only" },
+      { "name": "bank_code", "required": true, "note": "the receiving bank's code as the sending bank lists it" },
+      { "name": "amount", "required": true, "note": "two decimals, no thousands separator" },
+      { "name": "reference", "required": true, "note": "the document being paid" },
+      { "name": "purpose", "required": false, "note": "free text shown on the payee's statement" }
+    ],
+    "notes": [
+      "The exact column order and header line vary by bank; confirm the layout with the bank before a payment run (Phase 2, AP payment batches)."
+    ]
+  }
+}

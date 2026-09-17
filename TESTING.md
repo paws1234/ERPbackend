@@ -39,4 +39,19 @@
 
 ## Wiring
 
-- Not yet in CI: the pipeline that runs these layers on every change is `T-0.CICD.01`, which gates on this check. Until then the layers are run by hand with the command above.
+- The pipeline that runs these layers on every change is `.github/workflows/backend.yml`
+  (`T-0.CICD.01`). Its `checks` job starts a `postgres:16` service, installs
+  `requirements-dev.lock` (this repository's app dependencies plus the `httpx` the
+  API-level checks use), runs **every** `tests/check_*.py` and then the gate as its own
+  final step — the run order above, enforced by the job's step order rather than by
+  convention. The loop means a check that lands tomorrow is wired in without editing the
+  workflow; two checks are excluded by name, each with its reason in the file
+  (`check_backend_image.py` builds the image, which the `publish` job does for real;
+  `check_compose_stack.py` needs the frontend repository's image too).
+- A failing check fails the run, and the `publish` job needs that run, so no image is
+  published from a red commit. The same applies to the on-demand `deploy` job.
+- **Requiring the check on `main` is a repository setting, not a file.** Marking the
+  `checks` job as a required status check in branch protection is what turns a red run
+  into a blocked merge; the workflow can only make the run fail.
+- Locally, the checks run by hand with the command above; run them against a scratch
+  PostgreSQL, never against a database whose ledger matters.

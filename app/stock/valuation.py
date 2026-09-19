@@ -149,19 +149,25 @@ def _validate_identity_scope(
 ) -> None:
     if variant_id is not None:
         variant = session.get(ItemVariant, variant_id)
-        if variant is None or variant.company_id != item.company_id or variant.item_id != item.id:
+        if variant is None:
+            raise ValuationError(f"no variant {variant_id}")
+        if variant.company_id != item.company_id or variant.item_id != item.id:
             raise ValuationError(f"variant {variant_id} belongs to another item")
     if batch_id is not None:
         from app.stock.batches import Batch
 
         batch = session.get(Batch, batch_id)
-        if batch is None or batch.company_id != item.company_id or batch.item_id != item.id:
+        if batch is None:
+            raise ValuationError(f"no batch {batch_id}")
+        if batch.company_id != item.company_id or batch.item_id != item.id:
             raise ValuationError(f"batch {batch_id} belongs to another item")
     if serial_id is not None:
         from app.stock.serials import Serial
 
         serial = session.get(Serial, serial_id)
-        if serial is None or serial.company_id != item.company_id or serial.item_id != item.id:
+        if serial is None:
+            raise ValuationError(f"no serial {serial_id}")
+        if serial.company_id != item.company_id or serial.item_id != item.id:
             raise ValuationError(f"serial {serial_id} belongs to another item")
 
 

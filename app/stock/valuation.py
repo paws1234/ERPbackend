@@ -35,7 +35,7 @@ from sqlalchemy.orm import Session
 
 from app.company import COSTING_METHODS, Company
 from app.stock.entries import StockLedgerEntry, movements
-from app.stock.items import Item, ItemError
+from app.stock.items import Item, ItemError, ItemVariant
 
 MONEY_SCALE = Decimal("0.000001")
 
@@ -139,6 +139,32 @@ def _value_of(pairs: list[tuple[Decimal, Decimal]], method: str, item: Item) -> 
     )
 
 
+def _validate_identity_scope(
+    session: Session,
+    *,
+    item: Item,
+    variant_id: uuid.UUID | None = None,
+    batch_id: uuid.UUID | None = None,
+    serial_id: uuid.UUID | None = None,
+) -> None:
+    if variant_id is not None:
+        variant = session.get(ItemVariant, variant_id)
+        if variant is None or variant.company_id != item.company_id or variant.item_id != item.id:
+            raise ValuationError(f"variant {variant_id} belongs to another item")
+    if batch_id is not None:
+        from app.stock.batches import Batch
+
+        batch = session.get(Batch, batch_id)
+        if batch is None or batch.company_id != item.company_id or batch.item_id != item.id:
+            raise ValuationError(f"batch {batch_id} belongs to another item")
+    if serial_id is not None:
+        from app.stock.serials import Serial
+
+        serial = session.get(Serial, serial_id)
+        if serial is None or serial.company_id != item.company_id or serial.item_id != item.id:
+            raise ValuationError(f"serial {serial_id} belongs to another item")
+
+
 def valuation(
     session: Session,
     *,
@@ -160,6 +186,13 @@ def valuation(
     chosen = str(method or costing_method(session, company_id=company_id)).strip().lower()
     if item.company_id != company_id:
         raise ValuationError(f"{item.sku!r} belongs to another company")
+    _validate_identity_scope(
+        session,
+        item=item,
+        variant_id=variant_id,
+        batch_id=batch_id,
+        serial_id=serial_id,
+    )
     if chosen not in COSTING_METHODS:
         raise UnknownCostingMethodError(
             f"unknown costing method {chosen!r}; the methods are {', '.join(COSTING_METHODS)}"
@@ -215,6 +248,13 @@ def value_issue(
     chosen = str(method or costing_method(session, company_id=company_id)).strip().lower()
     if item.company_id != company_id:
         raise ValuationError(f"{item.sku!r} belongs to another company")
+    _validate_identity_scope(
+        session,
+        item=item,
+        variant_id=variant_id,
+        batch_id=batch_id,
+        serial_id=serial_id,
+    )
     if chosen not in COSTING_METHODS:
         raise UnknownCostingMethodError(
             f"unknown costing method {chosen!r}; the methods are {', '.join(COSTING_METHODS)}"

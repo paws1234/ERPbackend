@@ -144,6 +144,16 @@ def _held_quantity(
     batch=None,
     serial=None,
 ) -> Decimal:
+    if variant is not None and (
+        getattr(variant, "company_id", None) != item.company_id
+        or getattr(variant, "item_id", None) != item.id
+    ):
+        raise TraceabilityError(f"variant {variant.sku!r} belongs to another item")
+    if batch is not None and (
+        getattr(batch, "company_id", None) != item.company_id
+        or getattr(batch, "item_id", None) != item.id
+    ):
+        raise TraceabilityError(f"batch {batch.code!r} belongs to another item")
     if serial is not None and batch is not None:
         raise TraceabilityError(
             f"{item.sku!r} is tracked by serial, so a movement carries no batch"

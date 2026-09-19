@@ -38,7 +38,9 @@ from app.company import Company  # noqa: E402
 from app.db import Base, scope_to_company  # noqa: E402
 from app.ledger import posting  # noqa: E402,F401 — every check builds the one schema
 from app.ledger.posting import JournalEntry  # noqa: E402
+from app.party import create_party  # noqa: E402
 from app.security import REFUSED, Role, assign, define_role, grant, restrict  # noqa: E402
+from tests.seed import seed_accounts  # noqa: E402
 
 DAY = "2026-09-17"
 ALICE, BOB, CAROL = "alice", "bob", "carol"
@@ -85,6 +87,13 @@ def main() -> int:
                 base_currency="PHP",
                 fiscal_year_start_month=1,
             )
+        )
+        session.commit()
+        # The posts below state account codes (T-1.ACCT.01) and link a party by
+        # its code (T-0.PARTY.01), so both masters exist before the first request.
+        seed_accounts(session, company_id=company_id)
+        create_party(
+            session, company_id=company_id, code="ACME", name="Acme Trading", roles=["customer"]
         )
         session.commit()
 

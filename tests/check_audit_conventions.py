@@ -35,6 +35,7 @@ from app.audit import INCLUDE_SOFT_DELETED, soft_delete  # noqa: E402
 from app.company import Company  # noqa: E402
 from app.db import Base  # noqa: E402
 from app.ledger.posting import post_journal_entry  # noqa: E402
+from tests.seed import seed_accounts  # noqa: E402
 
 DAY = date(2026, 9, 17)
 
@@ -76,6 +77,9 @@ def main() -> int:
                 fiscal_year_start_month=1,
             )
         )
+        session.commit()
+        # The postings below state account codes, which must exist (T-1.ACCT.01).
+        seed_accounts(session, company_id=company_id)
         session.commit()
         post_journal_entry(
             session,

@@ -65,12 +65,43 @@ from sqlalchemy.orm import Mapped, Session, mapped_column
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app.audit import set_actor
-from app.company import Company
+from app.company import Company, UnknownCompanyError, company_base_currency
 from app.db import Base, scope_to_company
+from app.ledger.accounts import (
+    UnknownAccountError,
+    account_by_code,
+    create_account as create_account_row,
+    import_coa_template,
+    tree as account_tree,
+)
+from app.ledger.currency import (
+    Currency,
+    CurrencyError,
+    UnknownCurrencyError,
+    UnknownRateError,
+    currency_by_code,
+    rate_for,
+    register_currency,
+    store_rate,
+)
+from app.ledger.mapping import (
+    MissingMappingError,
+    mapped_account,
+    mappings,
+    set_mapping,
+)
 from app.ledger.posting import (
+    IncompleteSourceError,
     JournalEntry,
     UnbalancedEntryError,
     post_journal_entry,
+)
+from app.party import UnknownPartyError
+from app.reporting import (
+    DEFAULT_CAPABILITY as DEFAULT_REPORT_CAPABILITY,
+    ReportDefinition,
+    register as register_report,
+    run as run_report,
 )
 from app.security import (
     AccessDenied,
@@ -163,6 +194,10 @@ class JournalEntryIn(BaseModel):
     posting_date: date
     currency: str
     memo: str | None = None
+    # The document that produced the entry (T-1.ACCT.02), as its type and id — the
+    # pair the drill-down reads. Omitted for a manual entry.
+    source_type: str | None = None
+    source_id: str | None = None
     lines: list[JournalLineIn]
 
 
@@ -171,6 +206,11 @@ class JournalLineOut(BaseModel):
     account: str
     debit: str
     credit: str
+    # The same amounts restated in the company's base currency (T-1.ACCT.05):
+    # `amount × exchange_rate`, exact, so a reader never has to apply the rate
+    # themselves or wonder which rate applied.
+    base_debit: str
+    base_credit: str
     party: str | None = None
 
 
@@ -179,7 +219,10 @@ class JournalEntryOut(BaseModel):
     company_id: str
     posting_date: date
     currency: str
+    exchange_rate: str
     memo: str | None = None
+    source_type: str | None = None
+    source_id: str | None = None
     lines: list[JournalLineOut]
 
 
@@ -196,6 +239,109 @@ class CompanyOut(BaseModel):
     name: str
     base_currency: str
     fiscal_year_start_month: int
+
+
+# --- T-1.ACCT.01 — the chart of accounts --------------------------------
+
+
+class AccountIn(BaseModel):
+    code: str
+    name: str
+    account_class: str
+    parent_code: str | None = None
+
+
+class AccountOut(BaseModel):
+    id: str
+    code: str
+    name: str
+    account_class: str
+    parent_id: str | None = None
+
+
+class AccountTreeNode(AccountOut):
+    # Always present, empty for a leaf: an optional field must also be nullable
+    # (the convention the contract check enforces), and "no children" is not null.
+    children: list[AccountTreeNode]
+
+
+class CoaImportIn(BaseModel):
+    market: str
+
+
+class CoaImportOut(BaseModel):
+    market: str
+    imported: int
+    accounts: list[AccountOut]
+
+
+# --- T-1.ACCT.03 — the account mapping a posting module books to -----------
+
+
+class AccountMappingIn(BaseModel):
+    account_code: str
+
+
+class AccountMappingOut(BaseModel):
+    key: str
+    account_code: str
+    account_id: str
+
+
+# --- T-1.ACCT.05 — currencies and their dated rates -------------------------
+
+
+class CurrencyIn(BaseModel):
+    code: str
+    name: str
+
+
+class CurrencyOut(BaseModel):
+    code: str
+    name: str
+
+
+class FxRateIn(BaseModel):
+    currency: str
+    on: date
+    rate: str
+
+
+class FxRateOut(BaseModel):
+    base_currency: str
+    currency: str
+    rate_date: date
+    rate: str
+    source: str
+
+
+# --- T-1.ACCT.07 — the statements, run through the reporting framework ------
+
+
+class ReportIn(BaseModel):
+    code: str
+    name: str
+    schedule: str
+    recipients: list[str]
+    # Absent means the framework's default (`report.read`) — an optional field
+    # must also be nullable, so it is stated as such rather than defaulted here.
+    capability: str | None = None
+
+
+class ReportOut(BaseModel):
+    code: str
+    name: str
+    schedule: str
+    capability: str
+    recipients: list[str]
+
+
+class ReportRunOut(BaseModel):
+    code: str
+    status: str
+    produced: dict[str, Any] | None = None
+    error: str | None = None
+    delivered_to: list[str] | None = None
 
 
 class HealthOut(BaseModel):
@@ -288,6 +434,41 @@ def _money(value: Decimal) -> str:
     return format(value, "f")
 
 
+def _base_amount(value: Decimal, exchange_rate: Decimal) -> str:
+    """An amount in the company's base currency: the exact product, at money scale."""
+    return _money((value * exchange_rate).quantize(Decimal("0.000001")))
+
+
+def _document_id(value: str | None) -> uuid.UUID | None:
+    """A document id from the wire, or a refusal naming what arrived instead."""
+    if value is None:
+        return None
+    try:
+        return uuid.UUID(value)
+    except ValueError as exc:
+        raise ApiError(422, "invalid_source_id", f"not a document id: {value!r}") from exc
+
+
+def _rate_out(stored) -> FxRateOut:
+    return FxRateOut(
+        base_currency=stored.base_currency,
+        currency=stored.currency,
+        rate_date=stored.rate_date,
+        rate=format(stored.rate, "f"),
+        source=stored.source,
+    )
+
+
+def _account_out(account) -> AccountOut:
+    return AccountOut(
+        id=str(account.id),
+        code=account.code,
+        name=account.name,
+        account_class=account.account_class,
+        parent_id=str(account.parent_id) if account.parent_id else None,
+    )
+
+
 def _entry_out(entry: JournalEntry) -> JournalEntryOut:
     return JournalEntryOut(
         id=str(entry.id),
@@ -295,12 +476,17 @@ def _entry_out(entry: JournalEntry) -> JournalEntryOut:
         posting_date=entry.posting_date,
         currency=entry.currency,
         memo=entry.memo,
+        source_type=entry.source_type,
+        source_id=None if entry.source_id is None else str(entry.source_id),
+        exchange_rate=format(entry.exchange_rate, "f"),
         lines=[
             JournalLineOut(
                 line_no=line.line_no,
                 account=line.account,
                 debit=_money(line.debit),
                 credit=_money(line.credit),
+                base_debit=_base_amount(line.debit, entry.exchange_rate),
+                base_credit=_base_amount(line.credit, entry.exchange_rate),
                 party=line.party,
             )
             for line in entry.lines
@@ -388,6 +574,46 @@ async def _access_denied(_request: Request, exc: AccessDenied) -> JSONResponse:
     return _error(403, exc.code, str(exc))
 
 
+# A link that names something the company does not have is a client error, not a
+# failure of the platform: T-1.ACCT.01 turned the posting line's account into a
+# reference and T-0.PARTY.01 did the same for the party link.
+@app.exception_handler(UnknownAccountError)
+async def _unknown_account(_request: Request, exc: UnknownAccountError) -> JSONResponse:
+    return _error(422, "unknown_account", str(exc))
+
+
+@app.exception_handler(UnknownPartyError)
+async def _unknown_party(_request: Request, exc: UnknownPartyError) -> JSONResponse:
+    return _error(422, "unknown_party", str(exc))
+
+
+@app.exception_handler(MissingMappingError)
+async def _missing_mapping(_request: Request, exc: MissingMappingError) -> JSONResponse:
+    return _error(422, "unmapped_account", str(exc))
+
+
+@app.exception_handler(UnknownCompanyError)
+async def _unknown_company(_request: Request, exc: UnknownCompanyError) -> JSONResponse:
+    return _error(422, "unknown_company", str(exc))
+
+
+@app.exception_handler(UnknownCurrencyError)
+async def _unknown_currency(_request: Request, exc: UnknownCurrencyError) -> JSONResponse:
+    return _error(422, "unknown_currency", str(exc))
+
+
+# The catch-all for the currency service's refusals: an unknown rate, an attempt
+# to rewrite a past date, a missing provider. All client errors, all one shape.
+@app.exception_handler(CurrencyError)
+async def _currency_error(_request: Request, exc: CurrencyError) -> JSONResponse:
+    return _error(422, "currency_error", str(exc))
+
+
+@app.exception_handler(IncompleteSourceError)
+async def _incomplete_source(_request: Request, exc: IncompleteSourceError) -> JSONResponse:
+    return _error(422, "incomplete_source", str(exc))
+
+
 @app.exception_handler(Exception)
 async def _unexpected(_request: Request, exc: Exception) -> JSONResponse:
     # Registered so even a bug answers in the one shape; a client's error
@@ -422,6 +648,298 @@ def current_company(context: Context) -> CompanyOut:
         base_currency=company.base_currency,
         fiscal_year_start_month=company.fiscal_year_start_month,
     )
+
+
+@app.post(f"{BASE}/reports", response_model=ReportOut, status_code=201, tags=["reporting"])
+def register_report_definition(payload: ReportIn, context: Context) -> ReportOut:
+    """Register a report: its schedule and its recipients are rows (T-0.REPORT.01)."""
+    session = context.session
+    require(
+        session,
+        company_id=context.company_id,
+        subject=context.actor,
+        capability="report.configure",
+        entity="report_definition",
+    )
+    definition = register_report(
+        session,
+        company_id=context.company_id,
+        code=payload.code,
+        name=payload.name,
+        schedule=payload.schedule,
+        recipients=list(payload.recipients),
+        capability=payload.capability or DEFAULT_REPORT_CAPABILITY,
+    )
+    session.commit()
+    return ReportOut(
+        code=definition.code,
+        name=definition.name,
+        schedule=definition.schedule,
+        capability=definition.capability,
+        recipients=list(definition.recipients),
+    )
+
+
+@app.post(f"{BASE}/reports/{{code}}/run", response_model=ReportRunOut, tags=["reporting"])
+def run_report_now(code: str, context: Context) -> ReportRunOut:
+    """Run one registered report for this company, and deliver it to its recipients.
+
+    The capability the definition carries is asked for by the framework itself
+    (T-0.REPORT.01), so a caller who may not see the report is refused before
+    anything is built — and a builder that fails leaves a `failed` run, not a
+    silent absence.
+    """
+    session = context.session
+    definition = session.scalar(
+        select(ReportDefinition).where(
+            ReportDefinition.company_id == context.company_id, ReportDefinition.code == code
+        )
+    )
+    if definition is None:
+        raise ApiError(
+            404, "report_not_configured", f"no report {code!r} is registered for this company"
+        )
+    run_row = run_report(session, definition, actor=context.actor)
+    session.commit()
+    return ReportRunOut(
+        code=code,
+        status=run_row.status,
+        produced=run_row.produced,
+        error=run_row.error,
+        delivered_to=list(run_row.delivered_to) if run_row.delivered_to else None,
+    )
+
+
+@app.post(f"{BASE}/currencies", response_model=CurrencyOut, status_code=201, tags=["currency"])
+def new_currency(payload: CurrencyIn, context: Context) -> CurrencyOut:
+    """Register a currency in the master (T-1.ACCT.05) — global, three letters."""
+    require(
+        context.session,
+        company_id=context.company_id,
+        subject=context.actor,
+        capability="currency.write",
+        entity="currency",
+    )
+    currency = register_currency(
+        context.session, company_id=context.company_id, code=payload.code, name=payload.name
+    )
+    context.session.commit()
+    return CurrencyOut(code=currency.code, name=currency.name)
+
+
+@app.get(f"{BASE}/currencies", response_model=list[CurrencyOut], tags=["currency"])
+def list_currencies(context: Context) -> list[CurrencyOut]:
+    """The currencies this installation knows about."""
+    require(
+        context.session,
+        company_id=context.company_id,
+        subject=context.actor,
+        capability="currency.read",
+        entity="currency",
+    )
+    return [
+        CurrencyOut(code=currency.code, name=currency.name)
+        for currency in context.session.scalars(
+            select(Currency)
+            .where(Currency.company_id == context.company_id)
+            .order_by(Currency.code)
+        )
+    ]
+
+
+@app.put(f"{BASE}/fx-rates", response_model=FxRateOut, tags=["currency"])
+def put_fx_rate(payload: FxRateIn, context: Context) -> FxRateOut:
+    """Store one dated rate against the company's base currency.
+
+    A past date's rate cannot be rewritten (T-1.ACCT.05): the refusal is
+    `currency_error` with the reason, not a silent overwrite.
+    """
+    session = context.session
+    require(
+        session,
+        company_id=context.company_id,
+        subject=context.actor,
+        capability="fx.write",
+        entity="fx_rate",
+    )
+    stored = store_rate(
+        session,
+        company_id=context.company_id,
+        base_currency=company_base_currency(session, company_id=context.company_id),
+        currency=payload.currency,
+        on=payload.on,
+        rate=_amount(payload.rate),
+    )
+    session.commit()
+    return _rate_out(stored)
+
+
+@app.get(f"{BASE}/fx-rates", response_model=FxRateOut, tags=["currency"])
+def get_fx_rate(
+    context: Context,
+    currency: Annotated[str, Query()],
+    on: Annotated[date, Query()],
+) -> FxRateOut:
+    """The rate for one currency on one date — what a posting would use."""
+    session = context.session
+    require(
+        session,
+        company_id=context.company_id,
+        subject=context.actor,
+        capability="fx.read",
+        entity="fx_rate",
+    )
+    base = company_base_currency(session, company_id=context.company_id)
+    wanted = str(currency).strip().upper()
+    return FxRateOut(
+        base_currency=base,
+        currency=wanted,
+        rate_date=on,
+        rate=format(
+            rate_for(session, company_id=context.company_id, base_currency=base, currency=wanted, on=on),
+            "f",
+        ),
+        source="stored",
+    )
+
+
+@app.post(f"{BASE}/accounts", response_model=AccountOut, status_code=201, tags=["accounting"])
+def new_account(payload: AccountIn, context: Context) -> AccountOut:
+    """Create one account in the company's chart of accounts."""
+    session = context.session
+    require(
+        session,
+        company_id=context.company_id,
+        subject=context.actor,
+        capability="account.write",
+        entity="account",
+    )
+    reject_restricted_fields(
+        session,
+        company_id=context.company_id,
+        subject=context.actor,
+        entity="account",
+        payload=payload.model_dump(),
+    )
+    parent = (
+        account_by_code(session, company_id=context.company_id, code=payload.parent_code)
+        if payload.parent_code is not None
+        else None
+    )
+    account = create_account_row(
+        session,
+        company_id=context.company_id,
+        code=payload.code,
+        name=payload.name,
+        account_class=payload.account_class,
+        parent_id=parent.id if parent is not None else None,
+    )
+    session.commit()
+    return _account_out(account)
+
+
+@app.get(f"{BASE}/accounts/tree", response_model=list[AccountTreeNode], tags=["accounting"])
+def accounts_tree(context: Context) -> JSONResponse:
+    """The company's whole chart, nested, parents before their children."""
+    session = context.session
+    require(
+        session,
+        company_id=context.company_id,
+        subject=context.actor,
+        capability="account.read",
+        entity="account",
+    )
+    return JSONResponse(status_code=200, content=account_tree(session, company_id=context.company_id))
+
+
+@app.post(
+    f"{BASE}/accounts/import-coa",
+    response_model=CoaImportOut,
+    status_code=201,
+    tags=["accounting"],
+)
+def import_coa(payload: CoaImportIn, context: Context) -> CoaImportOut:
+    """Seed the chart from a market's localization pack template (T-0.LOC.01)."""
+    session = context.session
+    require(
+        session,
+        company_id=context.company_id,
+        subject=context.actor,
+        capability="account.write",
+        entity="account",
+    )
+    created = import_coa_template(
+        session, company_id=context.company_id, market=payload.market
+    )
+    session.commit()
+    return CoaImportOut(
+        market=payload.market,
+        imported=len(created),
+        accounts=[_account_out(account) for account in created],
+    )
+
+
+@app.put(
+    f"{BASE}/account-mappings/{{key}}",
+    response_model=AccountMappingOut,
+    tags=["accounting"],
+)
+def put_account_mapping(
+    key: str, payload: AccountMappingIn, context: Context
+) -> AccountMappingOut:
+    """Point one posting key at one account — the configuration a module posts through."""
+    session = context.session
+    require(
+        session,
+        company_id=context.company_id,
+        subject=context.actor,
+        capability="account.write",
+        entity="account_mapping",
+    )
+    mapping = set_mapping(
+        session,
+        company_id=context.company_id,
+        key=key,
+        account_code=payload.account_code,
+    )
+    session.commit()
+    return AccountMappingOut(
+        key=mapping.key,
+        account_code=mapped_account(
+            session, company_id=context.company_id, key=mapping.key
+        ).code,
+        account_id=str(mapping.account_id),
+    )
+
+
+@app.get(
+    f"{BASE}/account-mappings",
+    response_model=list[AccountMappingOut],
+    tags=["accounting"],
+)
+def list_account_mappings(context: Context) -> list[AccountMappingOut]:
+    """Every key this company has mapped — what a settings screen reads."""
+    session = context.session
+    require(
+        session,
+        company_id=context.company_id,
+        subject=context.actor,
+        capability="account.read",
+        entity="account_mapping",
+    )
+    # ponytail: one lookup per key, because the list is a settings screen's handful
+    # of rows. Ceiling: a company with hundreds of keys. Upgrade path: join the
+    # mapping to the account in one statement.
+    return [
+        AccountMappingOut(
+            key=mapping.key,
+            account_code=mapped_account(
+                session, company_id=context.company_id, key=mapping.key
+            ).code,
+            account_id=str(mapping.account_id),
+        )
+        for mapping in mappings(session, company_id=context.company_id)
+    ]
 
 
 @app.post(
@@ -484,6 +1002,8 @@ def post_entry(
             posting_date=payload.posting_date,
             currency=payload.currency,
             memo=payload.memo,
+            source_type=payload.source_type,
+            source_id=_document_id(payload.source_id),
             lines=[
                 {
                     "account": line.account,
@@ -518,8 +1038,14 @@ def list_entries(
     context: Context,
     limit: Annotated[int, Query(ge=1, le=MAX_LIMIT)] = DEFAULT_LIMIT,
     offset: Annotated[int, Query(ge=0)] = 0,
+    source_type: Annotated[str | None, Query()] = None,
+    source_id: Annotated[str | None, Query()] = None,
 ) -> PageOut:
-    """One page of the company's ledger, in posting order."""
+    """One page of the company's ledger, in posting order.
+
+    Filtered to one source document when the pair is given — the drill-down from
+    a document to the postings it produced (T-1.ACCT.02).
+    """
     session = context.session
     require(
         session,
@@ -528,14 +1054,14 @@ def list_entries(
         capability="journal.read",
         entity="journal_entry",
     )
-    total = session.scalar(
-        select(func.count()).select_from(JournalEntry).where(
-            JournalEntry.company_id == context.company_id
-        )
-    )
+    filters = [JournalEntry.company_id == context.company_id]
+    if source_type is not None or source_id is not None:
+        filters.append(JournalEntry.source_type == source_type)
+        filters.append(JournalEntry.source_id == _document_id(source_id))
+    total = session.scalar(select(func.count()).select_from(JournalEntry).where(*filters))
     entries = session.scalars(
         select(JournalEntry)
-        .where(JournalEntry.company_id == context.company_id)
+        .where(*filters)
         .order_by(JournalEntry.posting_date, JournalEntry.created_at)
         .limit(limit)
         .offset(offset)

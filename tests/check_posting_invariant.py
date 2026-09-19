@@ -36,6 +36,7 @@ from app.ledger.posting import (  # noqa: E402
     UnbalancedEntryError,
     post_journal_entry,
 )
+from tests.seed import seed_accounts  # noqa: E402
 
 COMPANY = uuid.uuid4()
 DAY = date(2026, 9, 17)
@@ -89,6 +90,10 @@ def main() -> int:
             )
         )
         session.commit()
+        # T-1.ACCT.01 made the posting line's account a reference, so the company
+        # this check posts for needs the accounts its lines state.
+        seed_accounts(session, company_id=COMPANY)
+        session.commit()
 
     with Session(engine) as session:
         # 1 — a balanced set persists
@@ -139,14 +144,16 @@ def main() -> int:
         with engine.connect() as conn:
             entry_id = uuid.uuid4()
             conn.exec_driver_sql(
-                "INSERT INTO journal_entry (id, company_id, posting_date, currency)"
-                " VALUES (%s, %s, %s, 'PHP')",
+                "INSERT INTO journal_entry (id, company_id, posting_date, currency,"
+                " exchange_rate) VALUES (%s, %s, %s, 'PHP', 1)",
                 (entry_id, COMPANY, DAY),
             )
             for line_no, (debit, credit) in enumerate(rows, start=1):
                 conn.exec_driver_sql(
-                    "INSERT INTO journal_line (id, entry_id, line_no, account, debit, credit)"
-                    " VALUES (%s, %s, %s, '1000', %s, %s)",
+                    "INSERT INTO journal_line (id, entry_id, line_no, account_id,"
+                    " account, debit, credit)"
+                    " VALUES (%s, %s, %s, (SELECT id FROM account WHERE code = '1000')"
+                    ", '1000', %s, %s)",
                     (uuid.uuid4(), entry_id, line_no, debit, credit),
                 )
             try:

@@ -41,6 +41,7 @@ from app.company import Company  # noqa: E402
 from app.db import Base  # noqa: E402
 from app.ledger import posting  # noqa: E402,F401 — every check builds the one schema
 from app.security import assign, define_role, grant  # noqa: E402
+from tests.seed import seed_accounts  # noqa: E402
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 CURRENT_DAY = "2026-09-17"
@@ -111,6 +112,10 @@ def main() -> int:
                 fiscal_year_start_month=1,
             )
         )
+        session.commit()
+        # The posting endpoint below states account codes, which must exist
+        # (T-1.ACCT.01): the primitive resolves them to real accounts.
+        seed_accounts(session, company_id=company_id)
         session.commit()
         # The caller needs the capabilities T-0.SEC.01 enforces at the boundary;
         # without them every request in this check would be refused as forbidden.

@@ -31,6 +31,7 @@ from sqlalchemy import (
     UniqueConstraint,
     Uuid,
     event,
+    select,
 )
 from sqlalchemy.orm import Mapped, Session, mapped_column, relationship
 
@@ -44,6 +45,10 @@ ROLES = ("customer", "supplier", "employee")
 
 class UnknownRoleError(ValueError):
     """Raised when a party is asked to hold no role, or one nobody has heard of."""
+
+
+class UnknownPartyError(ValueError):
+    """Raised when a posting names a party code this company does not have."""
 
 
 class Party(SoftDeleteMixin, Base):
@@ -152,6 +157,24 @@ for _ddl in (_PARTY_ROLE_FUNCTION, _PARTY_TRIGGER, _PARTY_ROLE_TRIGGER):
 
 # Masters retire by marking, never by removing the row (T-0.AUDIT.01).
 deny_hard_delete(Party.__table__)
+
+
+def party_by_code(session: Session, *, company_id: uuid.UUID, code: str) -> Party:
+    """The live party a document states, or a refusal.
+
+    A document links to a party by its code — what a person types, and what a
+    posting line states (T-1.ACCT.01 resolves the link with this). The lookup is
+    inside one company, so two companies may each have a party called `ACME`.
+    """
+    party = session.scalar(
+        select(Party).where(Party.company_id == company_id, Party.code == str(code))
+    )
+    if party is None:
+        raise UnknownPartyError(
+            f"no party {code!r} in this company; create it first (T-0.PARTY.01)"
+        )
+    return party
+
 
 
 def create_party(

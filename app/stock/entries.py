@@ -189,6 +189,7 @@ def record_movement(
     variant_id: uuid.UUID | None = None,
     batch_id: uuid.UUID | None = None,
     serial_id: uuid.UUID | None = None,
+    move_serial: bool = True,
 ) -> StockLedgerEntry:
     """Write one movement — the only way into the stock ledger.
 
@@ -282,7 +283,7 @@ def record_movement(
     session.flush()
     # A serial moves with the unit it identifies (T-1.INV.09): the ledger says the
     # unit moved, the serial row says where to.
-    if serial is not None:
+    if serial is not None and move_serial:
         from app.stock.serials import place_serial
 
         place_serial(

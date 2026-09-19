@@ -24,12 +24,13 @@ What each transaction guarantees:
 
 from __future__ import annotations
 
+import hashlib
 import uuid
 from datetime import date
 from decimal import Decimal
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.stock.entries import MovementError, StockLedgerEntry, on_hand, record_movement
@@ -54,8 +55,84 @@ def _value(value: Any) -> Decimal:
     return stated
 
 
-def _lock_item(session: Session, *, item: Item) -> None:
-    session.execute(select(Item.id).where(Item.id == item.id).with_for_update()).one()
+def _stock_lock_key(
+    *,
+    item: Item,
+    location: Location,
+    variant: ItemVariant | None = None,
+    batch=None,
+    serial=None,
+) -> int:
+    digest = hashlib.blake2b(
+        "|".join(
+            (
+                str(item.company_id),
+                str(item.id),
+                str(location.id),
+                str(variant.id if variant is not None else ""),
+                str(batch.id if batch is not None else ""),
+                str(serial.id if serial is not None else ""),
+            )
+        ).encode(),
+        digest_size=8,
+    ).digest()
+    return int.from_bytes(digest, byteorder="big", signed=True)
+
+
+def _lock_stock(
+    session: Session,
+    *,
+    item: Item,
+    location: Location,
+    variant: ItemVariant | None = None,
+    batch=None,
+    serial=None,
+) -> None:
+    if session.get_bind().dialect.name != "postgresql":
+        return
+    session.execute(
+        select(
+            func.pg_advisory_xact_lock(
+                _stock_lock_key(
+                    item=item, location=location, variant=variant, batch=batch, serial=serial
+                )
+            )
+        )
+    ).one()
+
+
+def _lock_transfer(
+    session: Session,
+    *,
+    item: Item,
+    from_location: Location,
+    to_location: Location,
+    variant: ItemVariant | None = None,
+    batch=None,
+    serial=None,
+) -> None:
+    if session.get_bind().dialect.name != "postgresql":
+        return
+    keys = sorted(
+        {
+            _stock_lock_key(
+                item=item,
+                location=from_location,
+                variant=variant,
+                batch=batch,
+                serial=serial,
+            ),
+            _stock_lock_key(
+                item=item,
+                location=to_location,
+                variant=variant,
+                batch=batch,
+                serial=serial,
+            ),
+        }
+    )
+    for key in keys:
+        session.execute(select(func.pg_advisory_xact_lock(key))).one()
 
 
 def _held_quantity(
@@ -112,7 +189,7 @@ def receive(
     given = quantity if isinstance(quantity, Decimal) else Decimal(str(quantity))
     if given <= 0:
         raise TransactionError(f"a receipt takes a positive quantity, got {given}")
-    _lock_item(session, item=item)
+    _lock_stock(session, item=item, location=location, variant=variant, batch=batch, serial=serial)
     moved = convert_quantity(session, item, quantity=given, from_uom=uom, to_uom=item.base_uom)
     entry = record_movement(
         session,
@@ -168,7 +245,7 @@ def issue(
         require_usable(
             session, batch, on=posting_date, allow_expired=allow_expired, actor=actor
         )
-    _lock_item(session, item=item)
+    _lock_stock(session, item=item, location=location, variant=variant, batch=batch, serial=serial)
     moved = convert_quantity(session, item, quantity=given, from_uom=uom, to_uom=item.base_uom)
     held = _held_quantity(
         session,
@@ -244,7 +321,15 @@ def transfer(
     given = quantity if isinstance(quantity, Decimal) else Decimal(str(quantity))
     if given <= 0:
         raise TransactionError(f"a transfer takes a positive quantity, got {given}")
-    _lock_item(session, item=item)
+    _lock_transfer(
+        session,
+        item=item,
+        from_location=from_location,
+        to_location=to_location,
+        variant=variant,
+        batch=batch,
+        serial=serial,
+    )
     moved = convert_quantity(session, item, quantity=given, from_uom=uom, to_uom=item.base_uom)
     held = _held_quantity(
         session,
@@ -282,6 +367,7 @@ def transfer(
         variant_id=variant.id if variant is not None else None,
         batch_id=batch.id if batch is not None else None,
         serial_id=serial.id if serial is not None else None,
+        move_serial=False,
     )
     into = record_movement(
         session,

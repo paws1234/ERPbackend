@@ -40,6 +40,7 @@ from app.stock.locations import create_location  # noqa: E402
 from app.stock.serials import (  # noqa: E402
     IN_STOCK,
     ISSUED,
+    UNRECEIVED,
     DuplicateSerialError,
     SerialError,
     add_serial,
@@ -106,6 +107,7 @@ def main() -> int:
         )
         unit_a = add_serial(session, item=pump, code="SN-0001")
         unit_b = add_serial(session, item=pump, code="SN-0002")
+        spare_unit = add_serial(session, item=spare, code="SN-SPARE")
         warehouse = create_location(
             session, company_id=COMPANY, code="WH1", name="Main", location_type="warehouse"
         )
@@ -146,24 +148,46 @@ def main() -> int:
             TraceabilityError,
         )
         session.rollback()
+        _refused(
+            lambda: receive(
+                session, item=pump, location=bin_one, uom="each", quantity=1,
+                value=Decimal("500.00"), currency="PHP", source_type="goods_receipt",
+                source_id=uuid.uuid4(), posting_date=DAY, serial=spare_unit,
+            ),
+            TraceabilityError,
+        )
+        session.rollback()
+        assert unit_a.status == UNRECEIVED and serials_in_stock(session, item=pump) == [], unit_a
         print(f"a serial-tracked item moves one named unit at a time: {refusal[:48]}…")
 
         # 2 — in, across, out
-        for serial in (unit_a, unit_b):
+        for serial, value in ((unit_a, Decimal("500.00")), (unit_b, Decimal("700.00"))):
             receive(
                 session, item=pump, location=bin_one, uom="each", quantity=1,
-                value=Decimal("500.00"), currency="PHP", source_type="goods_receipt",
+                value=value, currency="PHP", source_type="goods_receipt",
                 source_id=uuid.uuid4(), posting_date=DAY, serial=serial,
             )
         session.commit()
         assert (unit_a.status, unit_a.location_id) == (IN_STOCK, bin_one.id), unit_a
-        transfer(
+        moved_out, moved_in = transfer(
             session, item=pump, from_location=bin_one, to_location=bin_two, uom="each",
             quantity=1, currency="PHP", source_type="stock_transfer", source_id=uuid.uuid4(),
             posting_date=DAY, serial=unit_a,
         )
         session.commit()
+        assert (moved_out.value, moved_in.value) == (
+            Decimal("-500.000000"),
+            Decimal("500.000000"),
+        ), (moved_out.value, moved_in.value)
         assert unit_a.location_id == bin_two.id, unit_a
+        _refused(
+            lambda: issue(
+                session, item=pump, location=bin_one, uom="each", quantity=1, currency="PHP",
+                source_type="stock_issue", source_id=uuid.uuid4(), posting_date=DAY, serial=unit_a,
+            ),
+            InsufficientStockError,
+        )
+        session.rollback()
         issue(
             session, item=pump, location=bin_two, uom="each", quantity=1, currency="PHP",
             source_type="stock_issue", source_id=uuid.uuid4(), posting_date=DAY, serial=unit_a,

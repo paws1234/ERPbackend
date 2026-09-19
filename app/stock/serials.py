@@ -35,8 +35,8 @@ from app.audit import SoftDeleteMixin, deny_hard_delete
 from app.db import Base
 from app.stock.items import Item, ItemError
 
-# What a serial can be: in the warehouse, or gone out of it.
-IN_STOCK, ISSUED = "in_stock", "issued"
+# What a serial can be: registered but not yet received, in the warehouse, or gone.
+UNRECEIVED, IN_STOCK, ISSUED = "unreceived", "in_stock", "issued"
 
 
 class SerialError(ItemError):
@@ -58,7 +58,7 @@ class Serial(SoftDeleteMixin, Base):
     __table_args__ = (
         # Unique per item: the same value on another item is a different unit.
         UniqueConstraint("item_id", "code", name="uq_serial_item_code"),
-        CheckConstraint("status IN ('in_stock', 'issued')", name="ck_serial_status"),
+        CheckConstraint("status IN ('unreceived', 'in_stock', 'issued')", name="ck_serial_status"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
@@ -67,7 +67,7 @@ class Serial(SoftDeleteMixin, Base):
     )
     item_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("item.id"), nullable=False, index=True)
     code: Mapped[str] = mapped_column(String(64), nullable=False)
-    status: Mapped[str] = mapped_column(String(16), nullable=False, default=IN_STOCK)
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default=UNRECEIVED)
     # Where it is, while it is in stock. Null once it has been issued.
     location_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("location.id"), index=True

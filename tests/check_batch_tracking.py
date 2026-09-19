@@ -45,7 +45,7 @@ from app.stock.batches import (  # noqa: E402
 from app.stock.entries import on_hand  # noqa: E402
 from app.stock.items import TraceabilityError, create_item  # noqa: E402
 from app.stock.locations import create_location  # noqa: E402
-from app.stock.transactions import issue, receive, transfer  # noqa: E402
+from app.stock.transactions import InsufficientStockError, issue, receive, transfer  # noqa: E402
 from app.stock.valuation import set_costing_method, valuation  # noqa: E402
 from tests.seed import seed_stock_accounts  # noqa: E402
 
@@ -97,9 +97,15 @@ def main() -> int:
             session, company_id=COMPANY, sku="BOLT", name="Bolt", base_uom="each",
             traceability_mode="none",
         )
+        juice = create_item(
+            session, company_id=COMPANY, sku="JUICE", name="Juice", base_uom="each",
+            traceability_mode="batch_lot",
+        )
         old = create_batch(session, item=milk, code="MILK-OLD", expiry_date=LONG_AGO)
         fresh = create_batch(session, item=milk, code="MILK-SOON", expiry_date=SOON)
         latest = create_batch(session, item=milk, code="MILK-LATER", expiry_date=LATER)
+        other_item_batch = create_batch(session, item=juice, code="JUICE-LOT", expiry_date=LATER)
+        missing = create_batch(session, item=milk, code="MILK-MISSING", expiry_date=LATER)
         warehouse = create_location(
             session, company_id=COMPANY, code="WH1", name="Main", location_type="warehouse"
         )
@@ -140,10 +146,19 @@ def main() -> int:
             TraceabilityError,
         )
         session.rollback()
+        _refused(
+            lambda: receive(
+                session, item=milk, location=bin_one, uom="each", quantity=1,
+                value=Decimal("10.00"), currency="PHP", source_type="goods_receipt",
+                source_id=uuid.uuid4(), posting_date=DAY, batch=other_item_batch,
+            ),
+            TraceabilityError,
+        )
+        session.rollback()
         print(f"a batch-tracked item moves by batch: {refusal[:52]}…")
 
         # 2 — receipts and an issue by batch
-        for batch, quantity, value in ((latest, 20, "400.00"), (fresh, 30, "600.00")):
+        for batch, quantity, value in ((latest, 20, "400.00"), (fresh, 30, "900.00")):
             receive(
                 session, item=milk, location=bin_one, uom="each", quantity=quantity,
                 value=Decimal(value), currency="PHP", source_type="goods_receipt",
@@ -161,10 +176,21 @@ def main() -> int:
         )
         session.commit()
         at_fresh = on_hand(session, company_id=COMPANY, item_id=milk.id, batch_id=fresh.id)
-        assert at_fresh == {"quantity": Decimal(25), "value": Decimal("500.000000")}, at_fresh
+        assert at_fresh == {"quantity": Decimal(25), "value": Decimal("750.000000")}, at_fresh
         total = on_hand(session, company_id=COMPANY, item_id=milk.id)
         assert total["quantity"] == Decimal(45), total
+        assert total["value"] == Decimal("1150.000000"), total
         print(f"batch MILK-SOON holds {at_fresh['quantity']}; the item totals {total['quantity']}")
+
+        refusal = _refused(
+            lambda: issue(
+                session, item=milk, location=bin_one, uom="each", quantity=1, currency="PHP",
+                source_type="stock_issue", source_id=uuid.uuid4(), posting_date=DAY, batch=missing,
+            ),
+            InsufficientStockError,
+        )
+        session.rollback()
+        print(f"a missing batch at the bin is refused even when the item total is positive: {refusal[:40]}…")
 
         # 3 — FEFO suggests the soonest expiry that holds stock
         suggestion = fefo_batch(session, item=milk, location_id=bin_one.id)
@@ -213,10 +239,30 @@ def main() -> int:
         per_batch = valuation(
             session, company_id=COMPANY, item=milk, location_id=bin_one.id, batch_id=fresh.id
         )
-        assert per_batch["quantity"] == "25.000000" and per_batch["value"] == "500.000000", (
+        assert per_batch["quantity"] == "25.000000" and per_batch["value"] == "750.000000", (
             per_batch
         )
         print(f"per-batch valuation reads {per_batch['value']} for {per_batch['quantity']} units")
+
+        moved_out, moved_in = transfer(
+            session, item=milk, from_location=bin_one, to_location=bin_two, uom="each",
+            quantity=2, currency="PHP", source_type="stock_transfer", source_id=uuid.uuid4(),
+            posting_date=DAY, batch=latest,
+        )
+        session.commit()
+        assert (moved_out.value, moved_in.value) == (
+            Decimal("-40.000000"),
+            Decimal("40.000000"),
+        ), (moved_out.value, moved_in.value)
+        _refused(
+            lambda: transfer(
+                session, item=milk, from_location=bin_one, to_location=bin_two, uom="each",
+                quantity=1, currency="PHP", source_type="stock_transfer", source_id=uuid.uuid4(),
+                posting_date=DAY, batch=missing,
+            ),
+            InsufficientStockError,
+        )
+        session.rollback()
 
         # 7 — an untracked item is unaffected
         transfer(

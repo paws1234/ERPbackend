@@ -31,6 +31,8 @@ from typing import Any
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from app.company import company_base_currency
+from app.ledger.currency import rate_for
 from app.ledger.mapping import mapped_account
 from app.ledger.posting import JournalEntry, JournalLine, post_journal_entry
 from app.stock.entries import StockLedgerEntry
@@ -113,9 +115,7 @@ def reconcile(
     """
     inventory = mapped_account(session, company_id=company_id, key="inventory").code
 
-    stock_statement = select(
-        func.coalesce(func.sum(StockLedgerEntry.value), 0)
-    ).where(StockLedgerEntry.company_id == company_id)
+    stock_statement = select(StockLedgerEntry).where(StockLedgerEntry.company_id == company_id)
     gl_statement = (
         select(
             func.coalesce(
@@ -134,7 +134,21 @@ def reconcile(
         stock_statement = stock_statement.where(StockLedgerEntry.posting_date <= end)
         gl_statement = gl_statement.where(JournalEntry.posting_date <= end)
 
-    stock_value = Decimal(session.scalar(stock_statement)).quantize(MONEY_SCALE)
+    base_currency = company_base_currency(session, company_id=company_id)
+    stock_value = sum(
+        (
+            entry.value
+            * rate_for(
+                session,
+                company_id=company_id,
+                base_currency=base_currency,
+                currency=entry.currency,
+                on=entry.posting_date,
+            )
+            for entry in session.scalars(stock_statement)
+        ),
+        Decimal(0),
+    ).quantize(MONEY_SCALE)
     gl_value = Decimal(session.scalar(gl_statement)).quantize(MONEY_SCALE)
     return {
         "company_id": str(company_id),

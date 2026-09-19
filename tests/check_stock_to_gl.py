@@ -35,6 +35,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from app.company import Company  # noqa: E402
 from app.db import Base  # noqa: E402
+from app.ledger.currency import register_currency, store_rate  # noqa: E402
 from app.ledger.gl import account_balance, entries_for_source  # noqa: E402
 from app.ledger.mapping import set_mapping  # noqa: E402
 from app.ledger.posting import JournalEntry  # noqa: E402
@@ -80,6 +81,16 @@ def main() -> int:
         )
         session.commit()
         seed_accounts(session, company_id=COMPANY)
+        register_currency(session, company_id=COMPANY, code="PHP", name="Philippine Peso")
+        register_currency(session, company_id=COMPANY, code="USD", name="US Dollar")
+        store_rate(
+            session,
+            company_id=COMPANY,
+            base_currency="PHP",
+            currency="USD",
+            on=DAY,
+            rate="58.5",
+        )
         # inventory, the receipt's counterpart (goods received not invoiced), the
         # issue's counterpart (cost of goods sold) and the adjustment's.
         set_mapping(session, company_id=COMPANY, key="inventory", account_code="1200")
@@ -166,13 +177,20 @@ def main() -> int:
         session.commit()
         print("an adjustment's variance posts to inventory against the shrinkage account")
 
-        # 4 — the two agree
+        receive(
+            session, item=item, location=bin_one, uom="each", quantity=1,
+            value=Decimal("100.00"), currency="USD", source_type="goods_receipt",
+            source_id=uuid.uuid4(), posting_date=DAY,
+        )
+        session.commit()
+
+        # 4 — the two agree, including foreign-currency stock converted to base
         report = reconcile(session, company_id=COMPANY, start=START, end=END)
         assert report["balanced"], report
         assert report["difference"] == "0.000000", report
-        assert report["stock_value"] == "850.000000", report
+        assert report["stock_value"] == "6700.000000", report
         assert account_balance(session, company_id=COMPANY, account_code="1200") == Decimal(
-            "850.000000"
+            "6700.000000"
         ), "the GL inventory account disagrees with the ledger it was posted from"
         print(f"stock {report['stock_value']} = GL {report['gl_value']}; difference 0")
 
@@ -187,7 +205,7 @@ def main() -> int:
         assert not mismatch["balanced"], mismatch
         assert mismatch["difference"] == "-100.000000", mismatch
         assert on_hand(session, company_id=COMPANY, item_id=item.id)["value"] == Decimal(
-            "950.000000"
+            "1050.000000"
         )
         print(f"a movement with no posting is reported: difference {mismatch['difference']}")
         post_movement_to_gl(session, entry=skipped)

@@ -37,7 +37,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from app.company import Company  # noqa: E402
 from app.db import Base  # noqa: E402
 from app.stock.entries import StockLedgerEntry, movements_for_source, on_hand  # noqa: E402
-from app.stock.items import add_uom_conversion, create_item  # noqa: E402
+from app.stock.items import TraceabilityError, add_uom_conversion, add_variant, create_item  # noqa: E402
 from app.stock.locations import create_location  # noqa: E402
 from app.stock.transactions import (  # noqa: E402
     InsufficientStockError,
@@ -115,10 +115,29 @@ def main() -> int:
             base_uom="each",
             traceability_mode="none",
         )
+        other = create_item(
+            session,
+            company_id=COMPANY,
+            sku="NUT",
+            name="Nut",
+            base_uom="each",
+            traceability_mode="none",
+        )
+        stray_variant = add_variant(session, other, sku="NUT-M6", attributes={"size": "M6"})
         add_uom_conversion(session, item, from_uom="box", to_uom="each", factor=12)
         from_bin = _bin(session, code="B1", parent="SRC")
         to_bin = _bin(session, code="B2", parent="DST")
         session.commit()
+
+        _refused(
+            lambda: receive(
+                session, item=item, location=from_bin, uom="each", quantity=1,
+                value=Decimal("10.00"), currency="PHP", source_type="goods_receipt",
+                source_id=uuid.uuid4(), posting_date=DAY, variant=stray_variant,
+            ),
+            TraceabilityError,
+        )
+        session.rollback()
 
         # 1 — a receipt in boxes, stored in each
         receipt = uuid.uuid4()

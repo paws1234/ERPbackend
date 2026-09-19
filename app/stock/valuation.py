@@ -143,6 +143,7 @@ def valuation(
     location_id: uuid.UUID | None = None,
     variant_id: uuid.UUID | None = None,
     batch_id: uuid.UUID | None = None,
+    serial_id: uuid.UUID | None = None,
     as_of: date | None = None,
     method: str | None = None,
 ) -> dict:
@@ -160,10 +161,15 @@ def valuation(
     entries = [
         entry
         for entry in movements(
-            session, company_id=company_id, item_id=item.id, location_id=location_id, as_of=as_of
+            session,
+            company_id=company_id,
+            item_id=item.id,
+            location_id=location_id,
+            variant_id=variant_id,
+            batch_id=batch_id,
+            serial_id=serial_id,
+            as_of=as_of,
         )
-        if (variant_id is None or entry.variant_id == variant_id)
-        and (batch_id is None or entry.batch_id == batch_id)
     ]
     pairs = _pairs(entries)
     quantity = sum((moved for moved, _stated in pairs), Decimal(0))
@@ -187,6 +193,7 @@ def value_issue(
     location_id: uuid.UUID | None = None,
     variant_id: uuid.UUID | None = None,
     batch_id: uuid.UUID | None = None,
+    serial_id: uuid.UUID | None = None,
     as_of: date | None = None,
     method: str | None = None,
 ) -> Decimal:
@@ -207,10 +214,15 @@ def value_issue(
     entries = [
         entry
         for entry in movements(
-            session, company_id=company_id, item_id=item.id, location_id=location_id, as_of=as_of
+            session,
+            company_id=company_id,
+            item_id=item.id,
+            location_id=location_id,
+            variant_id=variant_id,
+            batch_id=batch_id,
+            serial_id=serial_id,
+            as_of=as_of,
         )
-        if (variant_id is None or entry.variant_id == variant_id)
-        and (batch_id is None or entry.batch_id == batch_id)
     ]
     pairs = _pairs(entries)
     before = _value_of(pairs, chosen, item)

@@ -46,7 +46,7 @@ from sqlalchemy.orm import Mapped, Session, mapped_column, relationship
 
 from app.audit import append_only
 from app.db import Base
-from app.stock.items import Item, ItemError, TraceabilityError
+from app.stock.items import Item, ItemError, ItemVariant, TraceabilityError
 from app.stock.locations import Location, require_leaf
 
 # One scale for quantities and values, the same one money uses.
@@ -226,9 +226,17 @@ def record_movement(
         raise TraceabilityError(
             f"{item.sku!r} is tracked by batch/lot, so every movement names its batch"
         )
+    if mode == "batch_lot" and serial_id is not None:
+        raise TraceabilityError(
+            f"{item.sku!r} is tracked by batch/lot, so a movement carries no serial"
+        )
     if mode == "serial" and serial_id is None:
         raise TraceabilityError(
             f"{item.sku!r} is tracked by serial, so every movement names its unit"
+        )
+    if mode == "serial" and batch_id is not None:
+        raise TraceabilityError(
+            f"{item.sku!r} is tracked by serial, so a movement carries no batch"
         )
     if mode == "none" and (batch_id is not None or serial_id is not None):
         raise TraceabilityError(
@@ -238,6 +246,23 @@ def record_movement(
         raise TraceabilityError(
             f"a serial-tracked item moves one unit at a time, got {moved}"
         )
+    if variant_id is not None:
+        variant = session.get(ItemVariant, variant_id)
+        if variant is None or variant.company_id != item.company_id or variant.item_id != item.id:
+            raise TraceabilityError(f"variant {variant_id} belongs to another item")
+    serial = None
+    if batch_id is not None:
+        from app.stock.batches import Batch
+
+        batch = session.get(Batch, batch_id)
+        if batch is None or batch.company_id != item.company_id or batch.item_id != item.id:
+            raise TraceabilityError(f"batch {batch_id} belongs to another item")
+    if serial_id is not None:
+        from app.stock.serials import Serial
+
+        serial = session.get(Serial, serial_id)
+        if serial is None or serial.company_id != item.company_id or serial.item_id != item.id:
+            raise TraceabilityError(f"serial {serial_id} belongs to another item")
 
     entry = StockLedgerEntry(
         company_id=item.company_id,
@@ -257,12 +282,12 @@ def record_movement(
     session.flush()
     # A serial moves with the unit it identifies (T-1.INV.09): the ledger says the
     # unit moved, the serial row says where to.
-    if serial_id is not None:
-        from app.stock.serials import Serial, place_serial
+    if serial is not None:
+        from app.stock.serials import place_serial
 
         place_serial(
             session,
-            serial=session.get(Serial, serial_id),
+            serial=serial,
             location_id=location.id,
             quantity_sign=1 if moved > 0 else -1,
         )
@@ -277,6 +302,7 @@ def on_hand(
     location_id: uuid.UUID | None = None,
     variant_id: uuid.UUID | None = None,
     batch_id: uuid.UUID | None = None,
+    serial_id: uuid.UUID | None = None,
     as_of: date | None = None,
 ) -> dict[str, Decimal]:
     """The sum of the ledger for what was asked: quantity and value on hand.
@@ -297,6 +323,8 @@ def on_hand(
         statement = statement.where(StockLedgerEntry.variant_id == variant_id)
     if batch_id is not None:
         statement = statement.where(StockLedgerEntry.batch_id == batch_id)
+    if serial_id is not None:
+        statement = statement.where(StockLedgerEntry.serial_id == serial_id)
     if as_of is not None:
         statement = statement.where(StockLedgerEntry.posting_date <= as_of)
     quantity, value = session.execute(statement).one()
@@ -326,6 +354,9 @@ def movements(
     company_id: uuid.UUID,
     item_id: uuid.UUID | None = None,
     location_id: uuid.UUID | None = None,
+    variant_id: uuid.UUID | None = None,
+    batch_id: uuid.UUID | None = None,
+    serial_id: uuid.UUID | None = None,
     as_of: date | None = None,
 ) -> list[StockLedgerEntry]:
     """The ledger rows for an item and/or location, oldest first — what valuation reads."""
@@ -338,6 +369,12 @@ def movements(
         statement = statement.where(StockLedgerEntry.item_id == item_id)
     if location_id is not None:
         statement = statement.where(StockLedgerEntry.location_id == location_id)
+    if variant_id is not None:
+        statement = statement.where(StockLedgerEntry.variant_id == variant_id)
+    if batch_id is not None:
+        statement = statement.where(StockLedgerEntry.batch_id == batch_id)
+    if serial_id is not None:
+        statement = statement.where(StockLedgerEntry.serial_id == serial_id)
     if as_of is not None:
         statement = statement.where(StockLedgerEntry.posting_date <= as_of)
     return list(session.scalars(statement))

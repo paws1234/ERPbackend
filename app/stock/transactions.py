@@ -29,6 +29,7 @@ from datetime import date
 from decimal import Decimal
 from typing import Any
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.stock.entries import MovementError, StockLedgerEntry, on_hand, record_movement
@@ -51,6 +52,36 @@ def _value(value: Any) -> Decimal:
     if stated < 0:
         raise TransactionError(f"a receipt's value cannot be negative, got {stated}")
     return stated
+
+
+def _lock_item(session: Session, *, item: Item) -> None:
+    session.execute(select(Item.id).where(Item.id == item.id).with_for_update()).one()
+
+
+def _held_quantity(
+    session: Session,
+    *,
+    item: Item,
+    location: Location,
+    variant: ItemVariant | None = None,
+    batch=None,
+    serial=None,
+) -> Decimal:
+    if serial is not None and (
+        getattr(serial, "location_id", None) != location.id or getattr(serial, "status", None) != "in_stock"
+    ):
+        raise InsufficientStockError(
+            f"serial {serial.code!r} is not in stock at {location.code!r}"
+        )
+    return on_hand(
+        session,
+        company_id=item.company_id,
+        item_id=item.id,
+        location_id=location.id,
+        variant_id=variant.id if variant is not None else None,
+        batch_id=batch.id if batch is not None else None,
+        serial_id=serial.id if serial is not None else None,
+    )["quantity"]
 
 
 def receive(
@@ -81,6 +112,7 @@ def receive(
     given = quantity if isinstance(quantity, Decimal) else Decimal(str(quantity))
     if given <= 0:
         raise TransactionError(f"a receipt takes a positive quantity, got {given}")
+    _lock_item(session, item=item)
     moved = convert_quantity(session, item, quantity=given, from_uom=uom, to_uom=item.base_uom)
     entry = record_movement(
         session,
@@ -136,14 +168,16 @@ def issue(
         require_usable(
             session, batch, on=posting_date, allow_expired=allow_expired, actor=actor
         )
+    _lock_item(session, item=item)
     moved = convert_quantity(session, item, quantity=given, from_uom=uom, to_uom=item.base_uom)
-    held = on_hand(
+    held = _held_quantity(
         session,
-        company_id=item.company_id,
-        item_id=item.id,
-        location_id=location.id,
-        variant_id=variant.id if variant is not None else None,
-    )["quantity"]
+        item=item,
+        location=location,
+        variant=variant,
+        batch=batch,
+        serial=serial,
+    )
     if moved > held:
         raise InsufficientStockError(
             f"{location.code} holds {held} of {item.sku!r}; issuing {moved} would take it"
@@ -156,6 +190,8 @@ def issue(
         quantity=moved,
         location_id=location.id,
         variant_id=variant.id if variant is not None else None,
+        batch_id=batch.id if batch is not None else None,
+        serial_id=serial.id if serial is not None else None,
     )
     entry = record_movement(
         session,
@@ -208,14 +244,16 @@ def transfer(
     given = quantity if isinstance(quantity, Decimal) else Decimal(str(quantity))
     if given <= 0:
         raise TransactionError(f"a transfer takes a positive quantity, got {given}")
+    _lock_item(session, item=item)
     moved = convert_quantity(session, item, quantity=given, from_uom=uom, to_uom=item.base_uom)
-    held = on_hand(
+    held = _held_quantity(
         session,
-        company_id=item.company_id,
-        item_id=item.id,
-        location_id=from_location.id,
-        variant_id=variant.id if variant is not None else None,
-    )["quantity"]
+        item=item,
+        location=from_location,
+        variant=variant,
+        batch=batch,
+        serial=serial,
+    )
     if moved > held:
         raise InsufficientStockError(
             f"{from_location.code} holds {held} of {item.sku!r}; transferring {moved}"
@@ -228,6 +266,8 @@ def transfer(
         quantity=moved,
         location_id=from_location.id,
         variant_id=variant.id if variant is not None else None,
+        batch_id=batch.id if batch is not None else None,
+        serial_id=serial.id if serial is not None else None,
     )
     out = record_movement(
         session,

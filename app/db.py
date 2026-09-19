@@ -54,6 +54,8 @@ CHILD_TABLES = {
     "approval_decision": ("approval_request", "request_id", "id"),
     "permission": ("role", "role_id", "id"),
     "field_permission": ("role", "role_id", "id"),
+    # T-1.INV.06: a count's lines belong to the count, which carries the dimension.
+    "physical_count_line": ("physical_count", "count_id", "id"),
 }
 
 

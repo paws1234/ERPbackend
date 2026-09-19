@@ -46,6 +46,7 @@ from app.db import (  # noqa: E402
     scope_to_company,
 )
 from app.ledger.posting import post_journal_entry  # noqa: E402
+from tests.seed import seed_accounts  # noqa: E402
 
 APP_ROLE = "erp_company_check"
 DAY = date(2026, 9, 17)
@@ -60,6 +61,10 @@ def _add_company(session: Session, code: str, month: int) -> uuid.UUID:
         fiscal_year_start_month=month,
     )
     session.add(company)
+    session.commit()
+    # A posting line states an account code (T-1.ACCT.01), so each company this
+    # check posts for has its own chart of accounts.
+    seed_accounts(session, company_id=company.id)
     session.commit()
     return company.id
 

@@ -41,6 +41,7 @@ from app.audit import (  # noqa: E402
 from app.company import Company  # noqa: E402
 from app.db import Base, scope_to_company  # noqa: E402
 from app.ledger.posting import post_journal_entry  # noqa: E402
+from tests.seed import seed_accounts  # noqa: E402
 
 APP_ROLE = "erp_audit_check"
 DAY = date(2026, 9, 17)
@@ -98,6 +99,9 @@ def main() -> int:
                 fiscal_year_start_month=1,
             )
         )
+        session.commit()
+        # The posting below states account codes, which must exist (T-1.ACCT.01).
+        seed_accounts(session, company_id=alpha_id)
         session.commit()
 
     # Everything after this happens as an ordinary application role bound to one

@@ -40,6 +40,7 @@ from app.ledger.posting import (  # noqa: E402
     JournalLine,
     post_journal_entry,
 )
+from tests.seed import seed_accounts  # noqa: E402
 
 COMPANY = uuid.uuid4()
 DAY = date(2026, 9, 17)
@@ -80,14 +81,16 @@ def _inject(conn: Connection, rows: Iterable[tuple[int, int]]) -> uuid.UUID:
     """Write one entry straight into the tables, bypassing the primitive."""
     entry_id = uuid.uuid4()
     conn.exec_driver_sql(
-        "INSERT INTO journal_entry (id, company_id, posting_date, currency)"
-        " VALUES (%s, %s, %s, 'PHP')",
+        "INSERT INTO journal_entry (id, company_id, posting_date, currency,"
+        " exchange_rate) VALUES (%s, %s, %s, 'PHP', 1)",
         (entry_id, COMPANY, DAY),
     )
     for line_no, (debit, credit) in enumerate(rows, start=1):
         conn.exec_driver_sql(
-            "INSERT INTO journal_line (id, entry_id, line_no, account, debit, credit)"
-            " VALUES (%s, %s, %s, '1000', %s, %s)",
+            "INSERT INTO journal_line (id, entry_id, line_no, account_id, account,"
+            " debit, credit)"
+            " VALUES (%s, %s, %s, (SELECT id FROM account WHERE code = '1000')"
+            ", '1000', %s, %s)",
             (uuid.uuid4(), entry_id, line_no, debit, credit),
         )
     return entry_id
@@ -119,6 +122,10 @@ def main() -> int:
                 fiscal_year_start_month=1,
             )
         )
+        session.commit()
+        # T-1.ACCT.01: the ledger this gate scans references a real chart of
+        # accounts, so the company it belongs to has one.
+        seed_accounts(session, company_id=COMPANY)
         session.commit()
 
     # 1 — a clean ledger: a real posting goes in, the gate stays quiet. A finding

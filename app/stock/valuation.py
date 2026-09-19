@@ -154,6 +154,8 @@ def valuation(
     (T-1.INV.08).
     """
     chosen = str(method or costing_method(session, company_id=company_id)).strip().lower()
+    if item.company_id != company_id:
+        raise ValuationError(f"{item.sku!r} belongs to another company")
     if chosen not in COSTING_METHODS:
         raise UnknownCostingMethodError(
             f"unknown costing method {chosen!r}; the methods are {', '.join(COSTING_METHODS)}"
@@ -207,6 +209,8 @@ def value_issue(
     if amount <= 0:
         raise ValuationError(f"an issue takes a positive quantity, got {amount}")
     chosen = str(method or costing_method(session, company_id=company_id)).strip().lower()
+    if item.company_id != company_id:
+        raise ValuationError(f"{item.sku!r} belongs to another company")
     if chosen not in COSTING_METHODS:
         raise UnknownCostingMethodError(
             f"unknown costing method {chosen!r}; the methods are {', '.join(COSTING_METHODS)}"

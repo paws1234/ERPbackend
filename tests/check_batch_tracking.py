@@ -220,6 +220,15 @@ def main() -> int:
             ExpiredBatchError,
         )
         session.rollback()
+        _refused(
+            lambda: issue(
+                session, item=milk, location=bin_one, uom="each", quantity=1, currency="PHP",
+                source_type="stock_issue", source_id=uuid.uuid4(), posting_date=DAY, batch=old,
+                allow_expired=True,
+            ),
+            ExpiredBatchError,
+        )
+        session.rollback()
         issue(
             session, item=milk, location=bin_one, uom="each", quantity=2, currency="PHP",
             source_type="stock_issue", source_id=uuid.uuid4(), posting_date=DAY, batch=old,

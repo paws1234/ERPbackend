@@ -144,6 +144,10 @@ def _held_quantity(
     batch=None,
     serial=None,
 ) -> Decimal:
+    if serial is not None and batch is not None:
+        raise TraceabilityError(
+            f"{item.sku!r} is tracked by serial, so a movement carries no batch"
+        )
     if serial is not None and (
         getattr(serial, "company_id", None) != item.company_id
         or getattr(serial, "item_id", None) != item.id

@@ -372,6 +372,8 @@ def transfer(
         variant_id=variant.id if variant is not None else None,
         batch_id=batch.id if batch is not None else None,
         serial_id=serial.id if serial is not None else None,
+        # Keep a transferred serial in stock: the inbound half below places it at the
+        # destination, so the outbound half must not mark it issued.
         move_serial=False,
     )
     into = record_movement(

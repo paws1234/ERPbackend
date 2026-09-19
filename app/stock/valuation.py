@@ -132,7 +132,11 @@ def _value_of(pairs: list[tuple[Decimal, Decimal]], method: str, item: Item) -> 
         return sum((moved for moved, _stated in pairs), Decimal(0)) * _standard_cost(item)
     if method == "moving_average":
         return _moving_average(pairs)
-    return _fifo(pairs)
+    if method == "fifo":
+        return _fifo(pairs)
+    raise UnknownCostingMethodError(
+        f"unknown costing method {method!r}; the methods are {', '.join(COSTING_METHODS)}"
+    )
 
 
 def valuation(

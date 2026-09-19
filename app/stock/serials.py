@@ -119,9 +119,10 @@ def place_serial(
 ) -> Serial:
     """Move a serial with the movement that carried it.
 
-    Receiving puts it in the location, issuing takes it out — the ledger says the
-    unit moved, and this says where to. A unit that is already issued cannot be
-    issued again, which is what keeps a serial in one place at one time.
+    Receiving puts it in stock at the named location and issuing takes it out. A
+    transfer keeps the unit in stock by skipping the outbound state change and
+    placing it on the inbound half. A unit that is already issued cannot be issued
+    again, which is what keeps a serial in one place at one time.
     """
     if quantity_sign > 0:
         serial.location_id = location_id

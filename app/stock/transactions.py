@@ -35,7 +35,7 @@ from sqlalchemy.orm import Session
 
 from app.stock.entries import MovementError, StockLedgerEntry, on_hand, record_movement
 from app.stock.gl_posting import post_movement_to_gl
-from app.stock.items import Item, ItemVariant
+from app.stock.items import Item, ItemVariant, TraceabilityError
 from app.stock.locations import Location, require_leaf
 from app.stock.valuation import value_issue
 
@@ -144,6 +144,11 @@ def _held_quantity(
     batch=None,
     serial=None,
 ) -> Decimal:
+    if serial is not None and (
+        getattr(serial, "company_id", None) != item.company_id
+        or getattr(serial, "item_id", None) != item.id
+    ):
+        raise TraceabilityError(f"serial {serial.code!r} belongs to another item")
     if serial is not None and (
         getattr(serial, "location_id", None) != location.id or getattr(serial, "status", None) != "in_stock"
     ):

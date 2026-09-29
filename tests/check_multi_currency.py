@@ -27,7 +27,7 @@ from __future__ import annotations
 import os
 import sys
 import uuid
-from datetime import date
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 
 from sqlalchemy import create_engine, func, select
@@ -57,9 +57,14 @@ from app.ledger.posting import JournalEntry, post_journal_entry  # noqa: E402
 from tests.seed import seed_accounts  # noqa: E402
 
 COMPANY = uuid.uuid4()
-TODAY = date(2026, 9, 19)
-POSTED_ON = date(2026, 9, 17)
-YESTERDAY = date(2026, 9, 16)
+# "Today" is **derived, never hard-coded**: this check corrects today's rate and
+# refuses to rewrite a past one, and a fixed date stops being today the next
+# morning — the check then fails against code that is perfectly correct (it did,
+# from 2026-09-20: a pinned 2026-09-19 turned into history and `store_rate`
+# refused the second write). Derived, it is true on every day it runs.
+TODAY = datetime.now(timezone.utc).date()
+POSTED_ON = TODAY - timedelta(days=2)
+YESTERDAY = TODAY - timedelta(days=3)
 PAIR_DAY_RATE = Decimal("58.5000000000")
 TODAYS_RATE = Decimal("59.7500000000")
 USD = Decimal("100.00")

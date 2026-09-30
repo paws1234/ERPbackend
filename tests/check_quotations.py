@@ -18,14 +18,17 @@ Green on all six:
 3. **an expired quotation cannot be converted**: the refusal names re-pricing as the
    fix, the card is not ordered, and after a re-price the same conversion succeeds
 4. **conversion produces an order whose lines are identical** to the quotation's, linked
-   back to it, carrying the same currency and the same rule per line
+   back to it, carrying the same currency and the same rule per line — and a quotation
+   that prices nothing cannot become an order, because the service is a caller too even
+   though the boundary refuses an empty line list
 5. **a quotation converts once** — refused by the service, refused again by the schema's
    own partial unique index for a hand-written second order — and a converted quotation
    can neither be re-priced nor have a line added, because it is no longer an offer
 6. **the whole path is drivable through the published API**, refusals included:
    `POST /api/v1/quotations`, `GET /api/v1/quotations/{number}`,
    `POST .../reprice` and `POST .../order` — and a quotation with **no lines** is
-   refused at the boundary, because nothing could ever convert it
+   refused at the boundary, because nothing could ever convert it, as is a number the
+   company already uses
 
 **Scratch database only**: it drops and recreates the public schema.
 """
@@ -52,6 +55,7 @@ from app.ledger.currency import UnknownCurrencyError  # noqa: E402
 from app.sales.customers import create_customer  # noqa: E402
 from app.sales.orders import (  # noqa: E402
     DuplicateOrderError,
+    IncompleteOrderError,
     SalesOrder,
     convert_quotation_to_order,
     order_for_quotation,
@@ -374,6 +378,20 @@ def main() -> int:
             f" (total {order_total(order)}) and links back to it"
         )
 
+        # 4b — a quotation that prices nothing has nothing to order. The boundary refuses
+        # an empty line list, but the service is a caller too, and this is the refusal
+        # that keeps a header-only document from becoming a header-only order.
+        nothing = create_quotation(
+            session, company_id=COMPANY, customer_id=acme.id, number="Q-NOTHING"
+        )
+        session.commit()
+        said = _refused(
+            lambda: convert_quotation_to_order(session, nothing, number="SO-NOTHING"),
+            IncompleteOrderError,
+        )
+        session.rollback()
+        print(f"4b. a quotation with no lines cannot become an order: {said}")
+
         # 5 — once, and no longer an offer afterwards
         said = _refused(
             lambda: convert_quotation_to_order(session, quote, number="SO-1002", on=date(2026, 10, 6)),
@@ -541,6 +559,18 @@ def main() -> int:
     )
     assert forbidden.status_code == 403, forbidden.text
     assert _shape_error(forbidden)["code"] == "forbidden"
+    # a number this company already uses is refused, not silently filed twice
+    reused = client.post(
+        f"{BASE}/quotations",
+        headers=headers,
+        json={
+            "number": "Q-API",
+            "customer_code": "ACME",
+            "lines": [{"line_no": 1, "description": "x", "quantity": "1", "unit_price": "1"}],
+        },
+    )
+    assert _shape_error(reused)["code"] == "quotation_error", reused.text
+    assert "Q-API" in _shape_error(reused)["message"], reused.text
     # a quotation with no lines is refused at the boundary: nothing could ever convert it
     empty = client.post(
         f"{BASE}/quotations",

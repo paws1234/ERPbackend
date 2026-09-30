@@ -649,6 +649,114 @@
         "title": "PageOut",
         "type": "object"
       },
+      "PipelineCardOut": {
+        "description": "One deal on the board.\n\nEvery field except the name may be **absent** from the payload: a field the\ncaller's role may not read is left out rather than nulled (T-0.SEC.01), so the\ncontract states these as optional and the shell must render a missing field as\n\"not shown\" rather than as an empty one.",
+        "properties": {
+          "expected_close": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expected Close"
+          },
+          "lost_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Lost Reason"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "owner": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Owner"
+          },
+          "value": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Value"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "title": "PipelineCardOut",
+        "type": "object"
+      },
+      "PipelineColumnOut": {
+        "description": "A column and the cards standing in it.",
+        "properties": {
+          "cards": {
+            "items": {
+              "$ref": "#/components/schemas/PipelineCardOut"
+            },
+            "title": "Cards",
+            "type": "array"
+          },
+          "stage": {
+            "$ref": "#/components/schemas/PipelineStageOut"
+          }
+        },
+        "required": [
+          "stage",
+          "cards"
+        ],
+        "title": "PipelineColumnOut",
+        "type": "object"
+      },
+      "PipelineStageOut": {
+        "description": "One configured column: its name, its place on the board and what it means.",
+        "properties": {
+          "is_lost": {
+            "title": "Is Lost",
+            "type": "boolean"
+          },
+          "is_won": {
+            "title": "Is Won",
+            "type": "boolean"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "position": {
+            "title": "Position",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "name",
+          "position",
+          "is_won",
+          "is_lost"
+        ],
+        "title": "PipelineStageOut",
+        "type": "object"
+      },
       "ReportIn": {
         "properties": {
           "capability": {
@@ -2772,6 +2880,123 @@
         "summary": "Post Entry",
         "tags": [
           "ledger"
+        ]
+      }
+    },
+    "/api/v1/pipeline/board": {
+      "get": {
+        "description": "The opportunity board as this caller may see it.\n\nRead-only, and the columns are whatever the company configured \u2014 no stage list\nis compiled in. The payload is filtered per field permission before it leaves,\nso a restricted value is not in the response at all; it is returned as a\n`JSONResponse` for that reason, rather than validated into a model whose\ndefaults would put a null back where a field was deliberately omitted.",
+        "operationId": "pipeline_board_view_api_v1_pipeline_board_get",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "x-company-id",
+            "required": true,
+            "schema": {
+              "title": "X-Company-Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-actor",
+            "required": false,
+            "schema": {
+              "default": "unknown",
+              "title": "X-Actor",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/PipelineColumnOut"
+                  },
+                  "title": "Response Pipeline Board View Api V1 Pipeline Board Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The request could not be understood"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The caller is not identified"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The caller may not do this"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The company, document or route does not exist"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The request clashes with one already made"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The request did not match the contract, or a domain rule refused it"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The platform failed unexpectedly"
+          }
+        },
+        "summary": "Pipeline Board View",
+        "tags": [
+          "sales"
         ]
       }
     },

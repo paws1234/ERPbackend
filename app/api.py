@@ -116,6 +116,7 @@ from app.reporting import (
     register as register_report,
     run as run_report,
 )
+from app.sales.pipeline import PipelineError, board as pipeline_board
 from app.security import (
     AccessDenied,
     readable_fields,
@@ -632,6 +633,11 @@ async def _requisition_error(_request: Request, exc: RequisitionError) -> JSONRe
 @app.exception_handler(RfqError)
 async def _rfq_error(_request: Request, exc: RfqError) -> JSONResponse:
     return _error(422, "rfq_error", str(exc))
+
+
+@app.exception_handler(PipelineError)
+async def _pipeline_error(_request: Request, exc: PipelineError) -> JSONResponse:
+    return _error(422, "pipeline_error", str(exc))
 
 
 @app.exception_handler(IncompleteSourceError)
@@ -1361,3 +1367,67 @@ def read_rfq(number: str, context: Context) -> RfqOut:
     )
     rfq = rfq_by_number(session, company_id=context.company_id, number=number)
     return _rfq_out(session, context, rfq)
+
+
+# --- T-3.SALES.02: the opportunity board --------------------------------------
+
+
+class PipelineCardOut(BaseModel):
+    """One deal on the board.
+
+    Every field except the name may be **absent** from the payload: a field the
+    caller's role may not read is left out rather than nulled (T-0.SEC.01), so the
+    contract states these as optional and the shell must render a missing field as
+    "not shown" rather than as an empty one.
+    """
+
+    name: str
+    value: str | None = None
+    owner: str | None = None
+    expected_close: str | None = None
+    lost_reason: str | None = None
+
+
+class PipelineStageOut(BaseModel):
+    """One configured column: its name, its place on the board and what it means."""
+
+    name: str
+    position: int
+    is_won: bool
+    is_lost: bool
+
+
+class PipelineColumnOut(BaseModel):
+    """A column and the cards standing in it."""
+
+    stage: PipelineStageOut
+    cards: list[PipelineCardOut]
+
+
+@app.get(
+    f"{BASE}/pipeline/board",
+    response_model=list[PipelineColumnOut],
+    tags=["sales"],
+)
+def pipeline_board_view(context: Context) -> JSONResponse:
+    """The opportunity board as this caller may see it.
+
+    Read-only, and the columns are whatever the company configured — no stage list
+    is compiled in. The payload is filtered per field permission before it leaves,
+    so a restricted value is not in the response at all; it is returned as a
+    `JSONResponse` for that reason, rather than validated into a model whose
+    defaults would put a null back where a field was deliberately omitted.
+    """
+    session = context.session
+    require(
+        session,
+        company_id=context.company_id,
+        subject=context.actor,
+        capability="pipeline.read",
+        entity="opportunity",
+    )
+    return JSONResponse(
+        content=pipeline_board(
+            session, company_id=context.company_id, subject=context.actor
+        )
+    )

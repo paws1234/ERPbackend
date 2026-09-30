@@ -57,10 +57,11 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import Mapped, Session, mapped_column, relationship
 
+from app.audit import append_only
 from app.db import Base
 from app.sales.customers import Customer
 from app.sales.quotations import Quotation, create_quotation
-from app.security import readable_fields
+from app.security import hidden_fields
 
 # Exact decimals, like every amount in the platform (DOMAIN-MODELS.md §2).
 MONEY = Numeric(20, 6)
@@ -181,6 +182,13 @@ class OpportunityMove(Base):
     moved_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
     opportunity: Mapped[Opportunity] = relationship(back_populates="moves")
+
+
+# A card's history is what an auditor reads, so it is append-only in the database
+# (T-0.AUDIT.01) exactly like an approval decision or a match run: `UPDATE` and
+# `DELETE` are refused by a trigger. The card's *current* stage is a column on the
+# opportunity, so nothing legitimate ever needs to rewrite the trail.
+append_only(OpportunityMove.__table__)
 
 
 def _required(value: Any, what: str) -> str:
@@ -310,14 +318,23 @@ def create_opportunity(
     starts at the column it was created in rather than at the first time somebody
     dragged it.
     """
+    if customer.company_id != company_id:
+        raise InvalidPipelineError(
+            f"customer {customer.party.code!r} belongs to another company; an opportunity"
+            " is filed under one company's customer (T-3.SALES.02)"
+        )
+    if stage is not None and stage.company_id != company_id:
+        raise UnknownStageError(
+            f"stage {stage.name!r} belongs to another company's board"
+        )
     if stage is None:
-        board = stages(session, company_id=company_id)
-        if not board:
+        configured = stages(session, company_id=company_id)
+        if not configured:
             raise InvalidPipelineError(
                 "this company has no pipeline stages yet; define one before creating an"
                 " opportunity (T-3.SALES.02)"
             )
-        stage = board[0]
+        stage = configured[0]
     opportunity = Opportunity(
         company_id=company_id,
         customer_id=customer.id,
@@ -385,6 +402,13 @@ def move_opportunity(
     elif to_stage.is_won:
         opportunity.lost_reason = None
         opportunity.closed_at = move.moved_at
+    else:
+        # Reopened: the card is back in play, so the *current* state has to say so —
+        # a closed-at stamp or a stale loss reason left behind would make an open deal
+        # read as a finished one. What it once reached stays in the trail, which is
+        # append-only.
+        opportunity.lost_reason = None
+        opportunity.closed_at = None
     session.add(move)
     session.flush()
     return move
@@ -444,9 +468,18 @@ def convert_to_quotation(
         company_id=opportunity.company_id,
         customer_id=opportunity.customer_id,
         number=number,
+        # The customer's own currency is part of "the details carried across": left
+        # unstated, a USD customer's quotation would silently read as the company's
+        # base currency instead.
+        currency=opportunity.customer.transaction_currency,
         opportunity_id=opportunity.id,
         issued_on=issued_on,
     )
+
+
+def _visible(payload: dict[str, Any], hidden: set[str]) -> dict[str, Any]:
+    """`payload` without the fields this subject may not read."""
+    return {key: value for key, value in payload.items() if key not in hidden}
 
 
 def board(
@@ -454,10 +487,17 @@ def board(
 ) -> list[dict[str, Any]]:
     """The board as the API hands it over: one entry per stage, its cards, filtered.
 
-    Every card goes through T-0.SEC.01's field permissions for `subject`, so a field
+    Every card is filtered by T-0.SEC.01's field permissions for `subject`, so a field
     the subject may not read is **absent** from the payload rather than null — a
     hidden value must never be mistaken for an empty one.
+
+    The restrictions are read **once** and reused for every card: they depend only on
+    the subject and the entity, so asking per card would put an identical query behind
+    each one and make the board's cost grow with the number of deals standing on it.
     """
+    hidden = hidden_fields(
+        session, company_id=company_id, subject=subject, entity=BOARD_ENTITY
+    )
     columns: list[dict[str, Any]] = []
     for stage in stages(session, company_id=company_id):
         cards = session.scalars(
@@ -474,12 +514,8 @@ def board(
                     "is_lost": stage.is_lost,
                 },
                 "cards": [
-                    readable_fields(
-                        session,
-                        company_id=company_id,
-                        subject=subject,
-                        entity=BOARD_ENTITY,
-                        payload={
+                    _visible(
+                        {
                             "name": card.name,
                             "value": str(card.value),
                             "owner": card.owner,
@@ -488,6 +524,7 @@ def board(
                             ),
                             "lost_reason": card.lost_reason,
                         },
+                        hidden,
                     )
                     for card in cards
                 ],

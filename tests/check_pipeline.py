@@ -3,7 +3,7 @@
     DATABASE_URL=postgresql+psycopg://postgres:postgres@localhost:5432/erpv1 \
         python tests/check_pipeline.py
 
-Green on all six:
+Green on all eight:
 
 1. **stages are rows, not code** — a company defines its own columns, in its own
    order, and `is_won`/`is_lost` are what give them meaning; a duplicate name or a
@@ -23,6 +23,11 @@ Green on all six:
    read is **absent** from the card rather than blank, and a viewer without the
    restriction sees it
 6. the board comes back in column order with each card in its own column
+7. one company's board cannot borrow another company's stage, nor be filed under another
+   company's customer
+8. the review findings of 2026-09-30 are held in the tree: tenant consistency on creation
+   **and** on a quotation's references, an **append-only** movement trail, a reopened card
+   that reads as open again, and a converted quotation that carries the customer's currency
 
 **Scratch database only**: it drops and recreates the public schema.
 """
@@ -34,7 +39,7 @@ import sys
 import uuid
 from datetime import date, datetime, timezone
 
-from sqlalchemy import create_engine, insert, select
+from sqlalchemy import create_engine, insert, select, update
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.orm import Session
 
@@ -42,6 +47,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from app.company import Company  # noqa: E402
 from app.db import Base  # noqa: E402
+from app.ledger.currency import register_currency  # noqa: E402
 from app.sales.customers import create_customer  # noqa: E402
 from app.sales.pipeline import (  # noqa: E402
     AlreadyConvertedError,
@@ -63,7 +69,7 @@ from app.sales.pipeline import (  # noqa: E402
     stage_by_name,
     stages,
 )
-from app.sales.quotations import Quotation  # noqa: E402
+from app.sales.quotations import InvalidQuotationError, Quotation, create_quotation  # noqa: E402
 from app.security import assign, define_role, restrict  # noqa: E402
 
 COMPANY = uuid.uuid4()
@@ -326,6 +332,145 @@ def main() -> int:
         )
         session.rollback()
         print(f"7. a stage from another company's board is refused: {said}")
+
+        # 8 — the review findings of 2026-09-30: one tenant, one chain, one trail
+        other_customer = create_customer(
+            session,
+            company_id=OTHER,
+            party_code="OTHER-CUST",
+            name="Other Co",
+            payment_terms_days=5,
+        )
+        second_buyer = create_customer(
+            session,
+            company_id=COMPANY,
+            party_code="SECOND",
+            name="Second Buyer",
+            payment_terms_days=15,
+        )
+        session.commit()
+        said = _refused(
+            lambda: create_opportunity(
+                session,
+                company_id=COMPANY,
+                customer=other_customer,
+                name="Cross tenant",
+                owner="jo",
+            ),
+            InvalidPipelineError,
+        )
+        session.rollback()
+        said += " | " + _refused(
+            lambda: create_opportunity(
+                session,
+                company_id=COMPANY,
+                customer=acme,
+                name="Cross stage",
+                owner="jo",
+                stage=other_stage,
+            ),
+            UnknownStageError,
+        )
+        session.rollback()
+        print(f"8a. an opportunity cannot borrow another company's customer or stage: {said}")
+
+        # ... and a quotation's references must be one company's and one customer's
+        said = _refused(
+            lambda: create_quotation(
+                session,
+                company_id=COMPANY,
+                customer_id=other_customer.id,
+                number="QUO-CROSS",
+            ),
+            InvalidQuotationError,
+        )
+        session.rollback()
+        said += " | " + _refused(
+            lambda: create_quotation(
+                session,
+                company_id=COMPANY,
+                customer_id=second_buyer.id,
+                number="QUO-CROSS2",
+                opportunity_id=deal.id,
+            ),
+            InvalidQuotationError,
+        )
+        session.rollback()
+        print(f"8b. a quotation cannot name another company's customer, nor another"
+              f" customer's win: {said}")
+
+        # 8c — the movement trail is append-only, in the database
+        for operation, statement in (
+            (
+                "UPDATE",
+                update(OpportunityMove)
+                .where(OpportunityMove.id == loss_move.id)
+                .values(reason="rewritten"),
+            ),
+            (
+                "DELETE",
+                OpportunityMove.__table__.delete().where(
+                    OpportunityMove.id == loss_move.id
+                ),
+            ),
+        ):
+            try:
+                session.execute(statement)
+                session.commit()
+            except DBAPIError as exc:
+                assert "is append-only" in str(exc), exc
+                session.rollback()
+            else:
+                raise AssertionError(f"the movement trail allowed a {operation}")
+        print("8c. the movement trail refuses both a rewrite and a deletion")
+
+        # 8d — reopening clears the current state, and keeps every move
+        reopened = create_opportunity(
+            session, company_id=COMPANY, customer=acme, name="Reopen me", owner="jo"
+        )
+        session.commit()
+        move_opportunity(session, reopened, to_stage=lost, actor="jo", reason="went cold", at=when)
+        session.commit()
+        session.refresh(reopened)
+        assert reopened.closed_at is not None and reopened.lost_reason == "went cold"
+        move_opportunity(session, reopened, to_stage=qualified, actor="jo", at=when)
+        session.commit()
+        session.refresh(reopened)
+        assert reopened.closed_at is None, "reopening left the card stamped closed"
+        assert reopened.lost_reason is None, "reopening left a stale loss reason"
+        reopened_trail = list(
+            session.scalars(
+                select(OpportunityMove).where(OpportunityMove.opportunity_id == reopened.id)
+            )
+        )
+        assert len(reopened_trail) == 3, f"the trail holds {len(reopened_trail)} moves, not 3"
+        print("8d. a reopened card reads as open again, and its trail keeps all three moves")
+
+        # 8e — a conversion carries the customer's own currency across
+        register_currency(session, company_id=COMPANY, code="USD", name="US Dollar")
+        session.commit()
+        usd_buyer = create_customer(
+            session,
+            company_id=COMPANY,
+            party_code="US-BUYER",
+            name="US Buyer",
+            payment_terms_days=30,
+            transaction_currency="USD",
+        )
+        session.commit()
+        export_deal = create_opportunity(
+            session, company_id=COMPANY, customer=usd_buyer, name="Export deal", owner="jo"
+        )
+        session.commit()
+        move_opportunity(session, export_deal, to_stage=won, actor="jo", at=when)
+        session.commit()
+        session.refresh(export_deal)
+        export_quote = convert_to_quotation(session, export_deal, number="QUO-USD")
+        session.commit()
+        assert export_quote.currency == "USD", (
+            f"the conversion stored {export_quote.currency!r}, not the customer's USD"
+        )
+        print(f"8e. the converted quotation carries the customer's currency ({export_quote.currency})")
 
     print("check_pipeline: all assertions green")
     return 0

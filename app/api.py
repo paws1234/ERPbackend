@@ -1375,13 +1375,14 @@ def read_rfq(number: str, context: Context) -> RfqOut:
 class PipelineCardOut(BaseModel):
     """One deal on the board.
 
-    Every field except the name may be **absent** from the payload: a field the
-    caller's role may not read is left out rather than nulled (T-0.SEC.01), so the
-    contract states these as optional and the shell must render a missing field as
-    "not shown" rather than as an empty one.
+    **Every** field may be absent from the payload: a field the caller's role may not
+    read is left out rather than nulled (T-0.SEC.01), and no field is exempt — a
+    restriction can be stated against any of them. The contract therefore marks them
+    all optional, and the shell renders a missing field as "not shown" rather than as
+    an empty one.
     """
 
-    name: str
+    name: str | None = None
     value: str | None = None
     owner: str | None = None
     expected_close: str | None = None

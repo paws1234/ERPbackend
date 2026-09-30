@@ -105,8 +105,47 @@ def create_quotation(
     currency: str | None = None,
     issued_on: date | None = None,
 ) -> Quotation:
-    """Open a quotation header, refusing a number this company already uses."""
+    """Open a quotation header, refusing a number this company already uses.
+
+    The references have to form one *tenant-owned* chain: a quotation owned by one
+    company but pointing at another company's customer would be visible while the row
+    it names is not, which is exactly the hole the company dimension exists to close.
+
+    ponytail: this is checked in the service, not by the schema. Ceiling: a writer
+    that bypasses this function could still store a mismatched pair. Upgrade path: a
+    composite foreign key on `(customer_id, company_id)` (and the same for the
+    opportunity), which needs a unique index on each parent — worth doing when a
+    second writer appears; today this function is the only way a quotation is made.
+    """
     wanted = _required(number, "a quotation number")
+    customer = session.scalar(
+        select(Customer).where(
+            Customer.id == customer_id, Customer.company_id == company_id
+        )
+    )
+    if customer is None:
+        raise InvalidQuotationError(
+            f"customer {customer_id} is not this company's; a quotation is filed under"
+            " one company's customer (T-3.SALES.02)"
+        )
+    if opportunity_id is not None:
+        # Imported here rather than at module level: `app.sales.pipeline` imports
+        # this module to convert a won opportunity, so that edge can only run one
+        # way at import time.
+        from app.sales.pipeline import Opportunity
+
+        opportunity = session.scalar(
+            select(Opportunity).where(
+                Opportunity.id == opportunity_id,
+                Opportunity.company_id == company_id,
+                Opportunity.customer_id == customer_id,
+            )
+        )
+        if opportunity is None:
+            raise InvalidQuotationError(
+                f"opportunity {opportunity_id} is not this company's, or belongs to"
+                " another customer; one win, one quotation (T-3.SALES.02)"
+            )
     already = session.scalar(
         select(Quotation).where(
             Quotation.company_id == company_id, Quotation.number == wanted

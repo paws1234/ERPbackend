@@ -650,7 +650,7 @@
         "type": "object"
       },
       "PipelineCardOut": {
-        "description": "One deal on the board.\n\nEvery field except the name may be **absent** from the payload: a field the\ncaller's role may not read is left out rather than nulled (T-0.SEC.01), so the\ncontract states these as optional and the shell must render a missing field as\n\"not shown\" rather than as an empty one.",
+        "description": "One deal on the board.\n\n**Every** field may be absent from the payload: a field the caller's role may not\nread is left out rather than nulled (T-0.SEC.01), and no field is exempt \u2014 a\nrestriction can be stated against any of them. The contract therefore marks them\nall optional, and the shell renders a missing field as \"not shown\" rather than as\nan empty one.",
         "properties": {
           "expected_close": {
             "anyOf": [
@@ -675,8 +675,15 @@
             "title": "Lost Reason"
           },
           "name": {
-            "title": "Name",
-            "type": "string"
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
           },
           "owner": {
             "anyOf": [
@@ -701,9 +708,6 @@
             "title": "Value"
           }
         },
-        "required": [
-          "name"
-        ],
         "title": "PipelineCardOut",
         "type": "object"
       },

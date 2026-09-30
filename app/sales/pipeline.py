@@ -66,6 +66,9 @@ from app.security import hidden_fields
 # Exact decimals, like every amount in the platform (DOMAIN-MODELS.md §2).
 MONEY = Numeric(20, 6)
 
+# The scale the column stores at, and the scale a card is always rendered at.
+MONEY_SCALE = Decimal("0.000001")
+
 # The entity name field permissions are stated against (T-0.SEC.01).
 BOARD_ENTITY = "opportunity"
 
@@ -100,6 +103,10 @@ class NotWonError(PipelineError):
 
 class AlreadyConvertedError(PipelineError):
     """That opportunity already produced a quotation; one win, one quotation."""
+
+
+class UnknownOpportunityError(PipelineError):
+    """A lookup named an opportunity this company does not have."""
 
 
 class PipelineStage(Base):
@@ -327,6 +334,14 @@ def create_opportunity(
         raise UnknownStageError(
             f"stage {stage.name!r} belongs to another company's board"
         )
+    if stage is not None and stage.is_lost:
+        # A loss is a *move* with a reason, and the reason is the one thing a lost card
+        # must say. Opening a card straight into the loss column would produce a card
+        # that ended before it began and says nothing about why.
+        raise InvalidPipelineError(
+            f"a deal cannot open in {stage.name!r}: losing is a move with a reason, so a"
+            " card created there would end without one (T-3.SALES.02)"
+        )
     if stage is None:
         configured = stages(session, company_id=company_id)
         if not configured:
@@ -482,6 +497,64 @@ def _visible(payload: dict[str, Any], hidden: set[str]) -> dict[str, Any]:
     return {key: value for key, value in payload.items() if key not in hidden}
 
 
+def card_payload(opportunity: Opportunity) -> dict[str, Any]:
+    """One card's fields, **before** any field permission is applied.
+
+    The board and the mutation endpoints both read a card through this, so the two
+    cannot disagree about what a card says — the same reason the frontend keeps one
+    reader per field. `id` is what lets the board be *driven*: a card is addressed by
+    it when it is moved, lost or converted.
+    """
+    return {
+        "id": str(opportunity.id),
+        "name": opportunity.name,
+        # Rendered at the money scale the column stores, so the card a mutation answers
+        # with reads exactly like the same card read back off the board: a pending
+        # object's own `Decimal("5000.00")` would otherwise answer `5000.00` where the
+        # board says `5000.000000`, and the client would be right to call that drift.
+        "value": format(opportunity.value.quantize(MONEY_SCALE), "f"),
+        "owner": opportunity.owner,
+        "expected_close": (
+            None
+            if opportunity.expected_close is None
+            else str(opportunity.expected_close)
+        ),
+        "lost_reason": opportunity.lost_reason,
+    }
+
+
+def opportunity_by_id(
+    session: Session, *, company_id: uuid.UUID, opportunity_id: uuid.UUID
+) -> Opportunity:
+    """The card a caller named, or a refusal — never another company's card."""
+    opportunity = session.scalar(
+        select(Opportunity).where(
+            Opportunity.id == opportunity_id, Opportunity.company_id == company_id
+        )
+    )
+    if opportunity is None:
+        raise UnknownOpportunityError(
+            f"no opportunity {opportunity_id} in this company (T-3.SALES.02)"
+        )
+    return opportunity
+
+
+def latest_move(session: Session, opportunity: Opportunity) -> OpportunityMove | None:
+    """The most recent step of a card's history — what a mutation answers with.
+
+    Read from the trail rather than from `opportunity.moves`: the collection is not
+    loaded when a move is added by id, so the relationship can answer with the state
+    it was loaded in. The trail is the record, and it is the thing that says who
+    moved the card and when.
+    """
+    return session.scalar(
+        select(OpportunityMove)
+        .where(OpportunityMove.opportunity_id == opportunity.id)
+        .order_by(OpportunityMove.moved_at.desc())
+        .limit(1)
+    )
+
+
 def board(
     session: Session, *, company_id: uuid.UUID, subject: str
 ) -> list[dict[str, Any]]:
@@ -514,19 +587,7 @@ def board(
                     "is_lost": stage.is_lost,
                 },
                 "cards": [
-                    _visible(
-                        {
-                            "name": card.name,
-                            "value": str(card.value),
-                            "owner": card.owner,
-                            "expected_close": (
-                                None if card.expected_close is None else str(card.expected_close)
-                            ),
-                            "lost_reason": card.lost_reason,
-                        },
-                        hidden,
-                    )
-                    for card in cards
+                    _visible(card_payload(card), hidden) for card in cards
                 ],
             }
         )

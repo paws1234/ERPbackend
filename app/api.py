@@ -42,14 +42,14 @@ import json
 import os
 import uuid
 from collections.abc import Iterator
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from decimal import Decimal, InvalidOperation
 from typing import Annotated, Any
 
 from fastapi import Depends, FastAPI, Header, Query, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy import (
     DateTime,
     ForeignKey,
@@ -116,9 +116,40 @@ from app.reporting import (
     register as register_report,
     run as run_report,
 )
-from app.sales.pipeline import PipelineError, board as pipeline_board
+from app.sales.customers import CustomerError, customer_by_code
+from app.sales.pipeline import (
+    BOARD_ENTITY,
+    PipelineError,
+    PipelineStage,
+    board as pipeline_board,
+    card_payload,
+    convert_to_quotation,
+    create_opportunity,
+    define_stage,
+    latest_move,
+    lose_opportunity,
+    move_opportunity,
+    opportunity_by_id,
+    stage_by_name,
+)
+from app.sales.orders import (
+    OrderError,
+    convert_quotation_to_order,
+    order_total,
+)
+from app.sales.quotations import (
+    QuotationError,
+    add_line,
+    create_quotation,
+    expired,
+    line_amount,
+    lines_of,
+    quotation_by_number,
+    reprice_quotation,
+)
 from app.security import (
     AccessDenied,
+    hidden_fields,
     readable_fields,
     reject_restricted_fields,
     require,
@@ -638,6 +669,21 @@ async def _rfq_error(_request: Request, exc: RfqError) -> JSONResponse:
 @app.exception_handler(PipelineError)
 async def _pipeline_error(_request: Request, exc: PipelineError) -> JSONResponse:
     return _error(422, "pipeline_error", str(exc))
+
+
+@app.exception_handler(CustomerError)
+async def _customer_error(_request: Request, exc: CustomerError) -> JSONResponse:
+    return _error(422, "customer_error", str(exc))
+
+
+@app.exception_handler(QuotationError)
+async def _quotation_error(_request: Request, exc: QuotationError) -> JSONResponse:
+    return _error(422, "quotation_error", str(exc))
+
+
+@app.exception_handler(OrderError)
+async def _order_error(_request: Request, exc: OrderError) -> JSONResponse:
+    return _error(422, "order_error", str(exc))
 
 
 @app.exception_handler(IncompleteSourceError)
@@ -1380,8 +1426,13 @@ class PipelineCardOut(BaseModel):
     restriction can be stated against any of them. The contract therefore marks them
     all optional, and the shell renders a missing field as "not shown" rather than as
     an empty one.
+
+    That includes `id`, which is what a card is addressed by when it is moved, lost or
+    converted: a caller whose role may not read it gets a board it can look at but not
+    drive, rather than one that offers an action that would fail.
     """
 
+    id: str | None = None
     name: str | None = None
     value: str | None = None
     owner: str | None = None
@@ -1432,3 +1483,679 @@ def pipeline_board_view(context: Context) -> JSONResponse:
             session, company_id=context.company_id, subject=context.actor
         )
     )
+
+
+# --- T-3.SALES.02: driving the board ------------------------------------------
+# The board above is a read. Without these the Kanban is a picture: the stages could
+# not be configured and a card could not be created, moved, lost or converted through
+# the published API at all. Every one of them is thin on purpose — the rules live in
+# `app/sales/pipeline.py`, and these endpoints only bind a request to them.
+
+
+class PipelineStageIn(BaseModel):
+    """A column to add: its name, its place, and what it means on the board.
+
+    `is_won`/`is_lost` are nullable rather than defaulted, like every other optional
+    field on this boundary: an omitted field says "not stated", and the contract keeps
+    optional and nullable the same thing so a client can tell the two apart.
+    """
+
+    name: str
+    position: int
+    is_won: bool | None = None
+    is_lost: bool | None = None
+
+
+class OpportunityIn(BaseModel):
+    """A new deal.
+
+    The customer is named by its **code**, the way Phase 2's documents name their
+    suppliers, so a caller never has to hold a database id to state who a deal is for.
+    """
+
+    customer_code: str
+    name: str
+    owner: str
+    value: str | None = None
+    expected_close: date | None = None
+    stage: str | None = None
+
+
+class PipelineMoveIn(BaseModel):
+    """One drag: the stage the card goes to, and the reason where one is needed."""
+
+    to_stage: str
+    reason: str | None = None
+
+
+class PipelineLossIn(BaseModel):
+    """Why a deal ended. Required — a loss that says nothing teaches nothing."""
+
+    reason: str
+
+
+class QuotationForOpportunityIn(BaseModel):
+    """The number the quotation is filed under, and the day it is issued."""
+
+    number: str
+    issued_on: date | None = None
+
+
+class PipelineMoveOut(BaseModel):
+    """The step just recorded: where from, where to, who, when and (if lost) why.
+
+    The actor is the request's own `X-Actor` and the instant is the server's, so a
+    move cannot be back-dated or attributed by the caller.
+    """
+
+    from_stage: str | None = None
+    to_stage: str
+    actor: str
+    reason: str | None = None
+    moved_at: str
+
+
+class OpportunityOut(BaseModel):
+    """One card after a mutation: the fields the caller may read, where it now stands,
+    and the move that put it there.
+
+    The `card` half is filtered exactly as the board filters it — the same
+    `card_payload` through the same `hidden_fields` — so a mutation can never become a
+    way of reading a value the board withholds. The envelope is the response's own
+    framing rather than a card field, so it is not itself filterable.
+    """
+
+    card: PipelineCardOut
+    stage: str
+    closed_at: str | None = None
+    move: PipelineMoveOut | None = None
+
+
+class QuotationLineOut(BaseModel):
+    """One priced line: what it is, what it costs, and why it costs that."""
+
+    line_no: int
+    description: str
+    quantity: str
+    uom: str
+    unit_price: str
+    rule_code: str | None = None
+    priced_on: date
+    amount: str
+
+
+class QuotationOut(BaseModel):
+    """One quotation: who it is for, what it prices, and whether it still holds.
+
+    `expired` is what a conversion asks before it acts, and `priced_on` on each line is
+    what says *when* the price was fixed — so "these prices are stale" is a fact in the
+    payload rather than something a client has to work out.
+    """
+
+    number: str
+    customer_code: str
+    currency: str | None = None
+    opportunity_id: str | None = None
+    issued_on: date
+    valid_until: date | None = None
+    expired: bool
+    lines: list[QuotationLineOut]
+    total: str
+
+
+def _stage_out(stage: PipelineStage) -> dict[str, Any]:
+    return {
+        "name": stage.name,
+        "position": stage.position,
+        "is_won": stage.is_won,
+        "is_lost": stage.is_lost,
+    }
+
+
+def _move_out(session: Session, opportunity) -> dict[str, Any] | None:
+    """The card's most recent step, with both stages **named** rather than identified.
+
+    A caller reads "Qualified → Won by maria at 09:15", not three uuids.
+    """
+    move = latest_move(session, opportunity)
+    if move is None:
+        return None
+    target = session.get(PipelineStage, move.to_stage_id)
+    source = (
+        None
+        if move.from_stage_id is None
+        else session.get(PipelineStage, move.from_stage_id)
+    )
+    return {
+        "from_stage": None if source is None else source.name,
+        "to_stage": target.name if target is not None else "",
+        "actor": move.actor,
+        "reason": move.reason,
+        "moved_at": move.moved_at.isoformat(),
+    }
+
+
+def _opportunity_out(
+    session: Session, context: RequestContext, opportunity
+) -> dict[str, Any]:
+    """One card after a mutation, filtered per field permission like the board."""
+    hidden = hidden_fields(
+        session,
+        company_id=context.company_id,
+        subject=context.actor,
+        entity=BOARD_ENTITY,
+    )
+    stage = session.get(PipelineStage, opportunity.stage_id)
+    return {
+        "card": {
+            field: value
+            for field, value in card_payload(opportunity).items()
+            if field not in hidden
+        },
+        "stage": stage.name if stage is not None else "",
+        "closed_at": (
+            None if opportunity.closed_at is None else opportunity.closed_at.isoformat()
+        ),
+        "move": _move_out(session, opportunity),
+    }
+
+
+@app.post(
+    f"{BASE}/pipeline/stages",
+    response_model=PipelineStageOut,
+    status_code=201,
+    tags=["sales"],
+)
+def new_pipeline_stage(payload: PipelineStageIn, context: Context) -> PipelineStageOut:
+    """Add a column to the company's board.
+
+    This is the whole of "configurable without code change": the board is the rows
+    this endpoint has written, in their stated order, and `is_won`/`is_lost` are what
+    give a column its meaning while the name stays the company's own.
+    """
+    session = context.session
+    require(
+        session,
+        company_id=context.company_id,
+        subject=context.actor,
+        capability="pipeline.configure",
+        entity="pipeline_stage",
+    )
+    stage = define_stage(
+        session,
+        company_id=context.company_id,
+        name=payload.name,
+        position=payload.position,
+        # An unstated flag is not won and not lost — the service takes a plain bool.
+        is_won=bool(payload.is_won),
+        is_lost=bool(payload.is_lost),
+    )
+    session.commit()
+    return PipelineStageOut(**_stage_out(stage))
+
+
+@app.post(
+    f"{BASE}/opportunities",
+    response_model=OpportunityOut,
+    status_code=201,
+    tags=["sales"],
+)
+def new_opportunity(payload: OpportunityIn, context: Context) -> JSONResponse:
+    """Put a deal on the board, in the first stage unless another is named.
+
+    The opening move is recorded like every other one, and its actor is the request's,
+    so a card's history starts at the column it was created in rather than at the
+    first time somebody dragged it.
+    """
+    session = context.session
+    require(
+        session,
+        company_id=context.company_id,
+        subject=context.actor,
+        capability="opportunity.write",
+        entity=BOARD_ENTITY,
+    )
+    # `exclude_unset`: only what the caller actually stated is held against the field
+    # permissions, so an omitted `value` is not a write to `value`.
+    reject_restricted_fields(
+        session,
+        company_id=context.company_id,
+        subject=context.actor,
+        entity=BOARD_ENTITY,
+        payload=payload.model_dump(exclude_unset=True),
+    )
+    customer = customer_by_code(
+        session, company_id=context.company_id, code=payload.customer_code
+    )
+    stage = (
+        None
+        if payload.stage is None
+        else stage_by_name(session, company_id=context.company_id, name=payload.stage)
+    )
+    opportunity = create_opportunity(
+        session,
+        company_id=context.company_id,
+        customer=customer,
+        name=payload.name,
+        owner=payload.owner,
+        value=_amount(payload.value),
+        expected_close=payload.expected_close,
+        stage=stage,
+        actor=context.actor,
+    )
+    body = _opportunity_out(session, context, opportunity)
+    session.commit()
+    return JSONResponse(status_code=201, content=body)
+
+
+@app.post(
+    f"{BASE}/opportunities/{{opportunity_id}}/moves",
+    response_model=OpportunityOut,
+    tags=["sales"],
+)
+def move_opportunity_card(
+    opportunity_id: uuid.UUID, payload: PipelineMoveIn, context: Context
+) -> JSONResponse:
+    """Move one card, recording who moved it and when.
+
+    Both come from the request rather than from the body: the actor is `X-Actor` and
+    the instant is the server's, so a move cannot be misattributed or back-dated. A
+    move into a column marked lost without a reason is refused by the domain rule.
+    """
+    session = context.session
+    require(
+        session,
+        company_id=context.company_id,
+        subject=context.actor,
+        capability="opportunity.write",
+        entity=BOARD_ENTITY,
+        entity_id=opportunity_id,
+    )
+    opportunity = opportunity_by_id(
+        session, company_id=context.company_id, opportunity_id=opportunity_id
+    )
+    to_stage = stage_by_name(
+        session, company_id=context.company_id, name=payload.to_stage
+    )
+    move_opportunity(
+        session,
+        opportunity,
+        to_stage=to_stage,
+        actor=context.actor,
+        reason=payload.reason,
+    )
+    body = _opportunity_out(session, context, opportunity)
+    session.commit()
+    return JSONResponse(content=body)
+
+
+@app.post(
+    f"{BASE}/opportunities/{{opportunity_id}}/loss",
+    response_model=OpportunityOut,
+    tags=["sales"],
+)
+def lose_opportunity_card(
+    opportunity_id: uuid.UUID, payload: PipelineLossIn, context: Context
+) -> JSONResponse:
+    """Mark a deal lost, with its reason.
+
+    The column it lands in is the company's own — the one it marked `is_lost` — so a
+    client never has to know which column that is, and the reason is required by the
+    domain rule rather than by this endpoint. The move is still recorded on the trail,
+    which is what an auditor reads.
+    """
+    session = context.session
+    require(
+        session,
+        company_id=context.company_id,
+        subject=context.actor,
+        capability="opportunity.write",
+        entity=BOARD_ENTITY,
+        entity_id=opportunity_id,
+    )
+    opportunity = opportunity_by_id(
+        session, company_id=context.company_id, opportunity_id=opportunity_id
+    )
+    lose_opportunity(
+        session, opportunity, actor=context.actor, reason=payload.reason
+    )
+    body = _opportunity_out(session, context, opportunity)
+    session.commit()
+    return JSONResponse(content=body)
+
+
+@app.post(
+    f"{BASE}/opportunities/{{opportunity_id}}/quotation",
+    response_model=QuotationOut,
+    status_code=201,
+    tags=["sales"],
+)
+def convert_opportunity_card(
+    opportunity_id: uuid.UUID,
+    payload: QuotationForOpportunityIn,
+    context: Context,
+) -> QuotationOut:
+    """Turn a won deal into a quotation, carrying the customer's details across.
+
+    Two capabilities, because the call writes two documents: it acts on the
+    opportunity and it creates a quotation (T-3.SALES.03's document, whose endpoints
+    will be gated the same way). One win produces one quotation — the refusal and the
+    schema's own partial unique index both hold however the request arrives.
+    """
+    session = context.session
+    for capability in ("opportunity.write", "quotation.write"):
+        require(
+            session,
+            company_id=context.company_id,
+            subject=context.actor,
+            capability=capability,
+            entity=BOARD_ENTITY,
+            entity_id=opportunity_id,
+        )
+    opportunity = opportunity_by_id(
+        session, company_id=context.company_id, opportunity_id=opportunity_id
+    )
+    quotation = convert_to_quotation(
+        session,
+        opportunity,
+        number=payload.number,
+        issued_on=payload.issued_on,
+    )
+    response = _quotation_out(session, quotation)
+    session.commit()
+    return response
+
+
+# --- T-3.SALES.03: quotations, their lines, and the order they become ---------
+# T-3.SALES.02 could raise a quotation but not price one. These are the paths that
+# make a quotation a document: priced lines with the rule that produced them, a
+# validity window, the re-pricing an expired offer needs, and the conversion that
+# turns an accepted one into an order with identical lines.
+
+
+class QuotationLineIn(BaseModel):
+    """One priced line at quote time.
+
+    `rule_code` is the pricing rule that produced the price, where a rule did — the
+    engine is T-3.SALES.06/07's and fills it; a price a person stated names no rule,
+    which is an honest null rather than an invented code. `priced_on` defaults to the
+    day the line is written, so the price's age is recorded either way.
+    """
+
+    line_no: int
+    description: str
+    quantity: str
+    unit_price: str
+    uom: str | None = None
+    rule_code: str | None = None
+    priced_on: date | None = None
+
+
+class QuotationIn(BaseModel):
+    """A quotation and everything on it, in one request.
+
+    Lines come with the header because a quotation with no lines is not a document —
+    and because a partially-created quotation would be a quotation nobody quoted.
+    There is no endpoint that adds a line to an existing one, so an empty list would
+    create a document that can never become an order; the boundary refuses it here
+    rather than letting the store hold it.
+    """
+
+    number: str
+    customer_code: str
+    currency: str | None = None
+    issued_on: date | None = None
+    valid_until: date | None = None
+    lines: Annotated[list[QuotationLineIn], Field(min_length=1)]
+
+
+class QuotationPriceIn(BaseModel):
+    """One line restated: its number, its new price, and the rule behind it."""
+
+    line_no: int
+    unit_price: str
+    rule_code: str | None = None
+
+
+class QuotationRepriceIn(BaseModel):
+    """A whole re-price: every line restated, and the window the new prices hold for.
+
+    `valid_until` is required rather than defaulted: the plan names no quotation
+    validity, so there is no honest default to invent — the caller states how long
+    their own re-price stands for.
+    """
+
+    valid_until: date
+    prices: list[QuotationPriceIn]
+
+
+class OrderLineIn(BaseModel):
+    """The number the order is filed under, and the day it is placed."""
+
+    number: str
+    on: date | None = None
+
+
+class OrderLineOut(BaseModel):
+    """One ordered line — the quotation's, carried across without re-keying."""
+
+    line_no: int
+    description: str
+    quantity: str
+    uom: str
+    unit_price: str
+    rule_code: str | None = None
+    priced_on: date
+    amount: str
+
+
+class OrderOut(BaseModel):
+    """The order a quotation became, and the quotation it came from."""
+
+    number: str
+    customer_code: str
+    quotation: str | None = None
+    currency: str | None = None
+    ordered_on: date
+    lines: list[OrderLineOut]
+    total: str
+
+
+def _quotation_out(session: Session, quotation) -> QuotationOut:
+    """One quotation as the API states it: its lines, its window, and its total."""
+    today = datetime.now(timezone.utc).date()
+    lines = lines_of(session, quotation)
+    return QuotationOut(
+        number=quotation.number,
+        customer_code=quotation.customer.party.code,
+        currency=quotation.currency,
+        opportunity_id=(
+            None if quotation.opportunity_id is None else str(quotation.opportunity_id)
+        ),
+        issued_on=quotation.issued_on,
+        valid_until=quotation.valid_until,
+        expired=expired(quotation, on=today),
+        lines=[
+            QuotationLineOut(
+                line_no=line.line_no,
+                description=line.description,
+                quantity=_money(line.quantity),
+                uom=line.uom,
+                unit_price=_money(line.unit_price),
+                rule_code=line.rule_code,
+                priced_on=line.priced_on,
+                amount=_money(line_amount(line)),
+            )
+            for line in lines
+        ],
+        total=_money(sum((line_amount(line) for line in lines), Decimal(0))),
+    )
+
+
+def _order_out(session: Session, order) -> OrderOut:
+    """One order as the API states it, with the quotation it came from named."""
+    lines = list(order.lines)
+    return OrderOut(
+        number=order.number,
+        customer_code=order.customer.party.code,
+        quotation=(
+            None if order.quotation is None else order.quotation.number
+        ),
+        currency=order.currency,
+        ordered_on=order.ordered_on,
+        lines=[
+            OrderLineOut(
+                line_no=line.line_no,
+                description=line.description,
+                quantity=_money(line.quantity),
+                uom=line.uom,
+                unit_price=_money(line.unit_price),
+                rule_code=line.rule_code,
+                priced_on=line.priced_on,
+                amount=_money(line.quantity * line.unit_price),
+            )
+            for line in lines
+        ],
+        total=_money(order_total(order)),
+    )
+
+
+@app.post(
+    f"{BASE}/quotations",
+    response_model=QuotationOut,
+    status_code=201,
+    tags=["sales"],
+)
+def new_quotation(payload: QuotationIn, context: Context) -> QuotationOut:
+    """Raise a quotation with its priced lines and its validity window."""
+    session = context.session
+    require(
+        session,
+        company_id=context.company_id,
+        subject=context.actor,
+        capability="quotation.write",
+        entity="quotation",
+    )
+    customer = customer_by_code(
+        session, company_id=context.company_id, code=payload.customer_code
+    )
+    quotation = create_quotation(
+        session,
+        company_id=context.company_id,
+        customer_id=customer.id,
+        number=payload.number,
+        currency=payload.currency,
+        issued_on=payload.issued_on,
+        valid_until=payload.valid_until,
+    )
+    for line in payload.lines:
+        add_line(
+            session,
+            quotation,
+            line_no=line.line_no,
+            description=line.description,
+            quantity=_amount(line.quantity),
+            unit_price=_amount(line.unit_price),
+            uom=line.uom or "unit",
+            rule_code=line.rule_code,
+            priced_on=line.priced_on,
+        )
+    response = _quotation_out(session, quotation)
+    session.commit()
+    return response
+
+
+@app.get(f"{BASE}/quotations/{{number}}", response_model=QuotationOut, tags=["sales"])
+def read_quotation(number: str, context: Context) -> QuotationOut:
+    """One quotation, with the lines it prices and whether it still holds."""
+    session = context.session
+    require(
+        session,
+        company_id=context.company_id,
+        subject=context.actor,
+        capability="quotation.read",
+        entity="quotation",
+    )
+    return _quotation_out(
+        session,
+        quotation_by_number(session, company_id=context.company_id, number=number),
+    )
+
+
+@app.post(
+    f"{BASE}/quotations/{{number}}/reprice",
+    response_model=QuotationOut,
+    tags=["sales"],
+)
+def reprice(number: str, payload: QuotationRepriceIn, context: Context) -> QuotationOut:
+    """Re-price a whole quotation and restate how long the new prices hold.
+
+    This is what an expired quotation needs before it can become an order, and it is
+    refused on a quotation that already became one — an order is not re-priced behind
+    the customer's back.
+    """
+    session = context.session
+    require(
+        session,
+        company_id=context.company_id,
+        subject=context.actor,
+        capability="quotation.write",
+        entity="quotation",
+    )
+    quotation = quotation_by_number(
+        session, company_id=context.company_id, number=number
+    )
+    reprice_quotation(
+        session,
+        quotation,
+        prices={
+            line.line_no: _amount(line.unit_price) for line in payload.prices
+        },
+        rules={line.line_no: line.rule_code for line in payload.prices},
+        valid_until=payload.valid_until,
+    )
+    response = _quotation_out(session, quotation)
+    session.commit()
+    return response
+
+
+@app.post(
+    f"{BASE}/quotations/{{number}}/order",
+    response_model=OrderOut,
+    status_code=201,
+    tags=["sales"],
+)
+def order_from_quotation(
+    number: str, payload: OrderLineIn, context: Context
+) -> OrderOut:
+    """Convert an accepted quotation into an order — once.
+
+    Two capabilities, because the call reads one document and writes another: it acts
+    on the quotation and it creates an order (whose lifecycle is T-3.SALES.04's).
+    """
+    session = context.session
+    # Two capabilities, each recorded against the document it is about: the call reads
+    # one document and writes another, and the order's lifecycle is T-3.SALES.04's.
+    require(
+        session,
+        company_id=context.company_id,
+        subject=context.actor,
+        capability="quotation.write",
+        entity="quotation",
+    )
+    require(
+        session,
+        company_id=context.company_id,
+        subject=context.actor,
+        capability="order.write",
+        entity="sales_order",
+    )
+    quotation = quotation_by_number(
+        session, company_id=context.company_id, number=number
+    )
+    order = convert_quotation_to_order(
+        session, quotation, number=payload.number, on=payload.on
+    )
+    response = _order_out(session, order)
+    session.commit()
+    return response

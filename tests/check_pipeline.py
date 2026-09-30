@@ -3,7 +3,7 @@
     DATABASE_URL=postgresql+psycopg://postgres:postgres@localhost:5432/erpv1 \
         python tests/check_pipeline.py
 
-Green on all eight:
+Green on all nine:
 
 1. **stages are rows, not code** — a company defines its own columns, in its own
    order, and `is_won`/`is_lost` are what give them meaning; a duplicate name or a
@@ -28,6 +28,10 @@ Green on all eight:
 8. the review findings of 2026-09-30 are held in the tree: tenant consistency on creation
    **and** on a quotation's references, an **append-only** movement trail, a reopened card
    that reads as open again, and a converted quotation that carries the customer's currency
+9. **the board can be driven through the published API** — §9 adds a stage, creates a card,
+   moves it, loses it and converts a win through `POST /api/v1/…`, and asserts that the actor
+   and the instant a move records come from the **request** (`X-Actor` and the server's clock)
+   rather than from the body; a withheld field stays withheld in a mutation's answer too
 
 **Scratch database only**: it drops and recreates the public schema.
 """
@@ -45,6 +49,7 @@ from sqlalchemy.orm import Session
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from app.api import BASE, app  # noqa: E402
 from app.company import Company  # noqa: E402
 from app.db import Base  # noqa: E402
 from app.ledger.currency import register_currency  # noqa: E402
@@ -70,10 +75,26 @@ from app.sales.pipeline import (  # noqa: E402
     stages,
 )
 from app.sales.quotations import InvalidQuotationError, Quotation, create_quotation  # noqa: E402
-from app.security import assign, define_role, restrict  # noqa: E402
+from app.security import assign, define_role, grant, restrict  # noqa: E402
+from fastapi.testclient import TestClient  # noqa: E402
 
 COMPANY = uuid.uuid4()
 OTHER = uuid.uuid4()
+
+
+def _shape_error(response) -> dict:
+    """The platform's one error shape, or a failure that says what arrived instead."""
+    body = response.json()
+    assert isinstance(body, dict) and set(body) == {"error"}, f"not the one error shape: {body}"
+    assert set(body["error"]) == {"code", "message", "details"}, body
+    return body["error"]
+
+
+def _refusal(response, expected: str) -> str:
+    """A refusal over HTTP: the status, the code and the message it came back with."""
+    error = _shape_error(response)
+    assert error["code"] == expected, f"got {error}"
+    return error["message"]
 
 
 def _refused(call, expected: type[Exception] | str) -> str:
@@ -291,6 +312,22 @@ def main() -> int:
         session.rollback()
         print(f"4b. the loss recorded its reason on card and move; removal is refused ({said})")
 
+        # 4c — a card cannot be *opened* in the loss column: ending is a move, with a
+        # reason, and a card created there would end before it began
+        said = _refused(
+            lambda: create_opportunity(
+                session,
+                company_id=COMPANY,
+                customer=acme,
+                name="Born lost",
+                owner="jo",
+                stage=lost,
+            ),
+            InvalidPipelineError,
+        )
+        session.rollback()
+        print(f"4c. a deal cannot open in the loss column: {said}")
+
         # 5 — the board respects field-level permissions
         role = define_role(session, company_id=COMPANY, code="junior", name="Junior")
         restrict(session, role, entity="opportunity", field="value", can_read=False)
@@ -471,6 +508,186 @@ def main() -> int:
             f"the conversion stored {export_quote.currency!r}, not the customer's USD"
         )
         print(f"8e. the converted quotation carries the customer's currency ({export_quote.currency})")
+
+        # 9 — the board can be **driven** through the published API (T-3.SALES.02)
+        # Everything above is the domain layer. This section is the boundary: the
+        # Kanban is only drivable if the stages and the cards have paths, and the
+        # actor and the instant a move records have to come from the request.
+        seller = define_role(session, company_id=COMPANY, code="seller", name="Seller")
+        grant(
+            session,
+            seller,
+            "pipeline.read",
+            "pipeline.configure",
+            "opportunity.write",
+            "quotation.write",
+        )
+        assign(session, company_id=COMPANY, subject="maria", role=seller)
+        # The restricted viewer from §5 also needs the read capability, so the board
+        # can be asked for **through the API** as the role the restriction applies to.
+        grant(session, role, "pipeline.read", "opportunity.write")
+        session.commit()
+
+    client = TestClient(app, raise_server_exceptions=False)
+    headers = {"X-Company-Id": str(COMPANY), "X-Actor": "maria"}
+    intern = {**headers, "X-Actor": "intern"}
+    stages_url = f"{BASE}/pipeline/stages"
+    cards_url = f"{BASE}/opportunities"
+
+    # 9a — a stage is added through the API, and a clash is refused in the one shape
+    added = client.post(
+        stages_url, headers=headers, json={"name": "Negotiation", "position": 6}
+    )
+    assert added.status_code == 201, added.text
+    assert added.json() == {
+        "name": "Negotiation",
+        "position": 6,
+        "is_won": False,
+        "is_lost": False,
+    }, added.json()
+    said = _refusal(
+        client.post(
+            stages_url, headers=headers, json={"name": "Negotiation", "position": 6}
+        ),
+        "pipeline_error",
+    )
+    board_names = [
+        column["stage"]["name"]
+        for column in client.get(f"{BASE}/pipeline/board", headers=headers).json()
+    ]
+    assert board_names == ["Lead", "Qualified", "Pilot", "Won", "Lost", "Negotiation"], board_names
+    print(f"9a. a stage added over the API joins the board, and a duplicate is refused: {said}")
+
+    # 9b — a card is created over the API, and its opening move names the requester
+    created = client.post(
+        cards_url,
+        headers=headers,
+        json={
+            "customer_code": "ACME",
+            "name": "API deal",
+            "owner": "jo",
+            "value": "5000.00",
+            "expected_close": "2026-12-31",
+        },
+    )
+    assert created.status_code == 201, created.text
+    card = created.json()
+    assert card["card"]["name"] == "API deal", card
+    assert card["card"]["value"] == "5000.000000", card["card"]
+    assert card["stage"] == "Lead", card
+    assert card["move"]["actor"] == "maria", card["move"]
+    assert card["move"]["from_stage"] is None and card["move"]["to_stage"] == "Lead"
+    assert card["closed_at"] is None
+    deal_id = card["card"]["id"]
+    print(f"9b. the API created a card ({deal_id[:8]}…) whose opening move names {card['move']['actor']!r}")
+
+    # 9c — a move records the request's actor and the **server's** instant
+    started = datetime.now(timezone.utc)
+    moved = client.post(
+        f"{cards_url}/{deal_id}/moves", headers=headers, json={"to_stage": "Qualified"}
+    )
+    assert moved.status_code == 200, moved.text
+    step = moved.json()["move"]
+    assert step["from_stage"] == "Lead" and step["to_stage"] == "Qualified", step
+    assert step["actor"] == "maria", step
+    stamped = datetime.fromisoformat(step["moved_at"])
+    assert stamped.tzinfo is not None, step["moved_at"]
+    assert stamped >= started, f"the instant was not the server's: {step['moved_at']}"
+    assert moved.json()["stage"] == "Qualified"
+    print(f"9c. the move recorded {step['actor']!r} at {step['moved_at']} — both from the request, not the body")
+
+    # 9d — a loss without a reason is refused; with one it is recorded on card and move
+    said = _refusal(
+        client.post(
+            f"{cards_url}/{deal_id}/loss", headers=headers, json={"reason": ""}
+        ),
+        "pipeline_error",
+    )
+    still = client.get(f"{BASE}/pipeline/board", headers=headers).json()
+    standing = next(
+        column["stage"]["name"]
+        for column in still
+        for one in column["cards"]
+        if one["name"] == "API deal"
+    )
+    assert standing == "Qualified", f"the refused loss moved the card to {standing}"
+    ended = client.post(
+        f"{cards_url}/{deal_id}/loss",
+        headers=headers,
+        json={"reason": "Chose a competitor"},
+    )
+    assert ended.status_code == 200, ended.text
+    assert ended.json()["stage"] == "Lost", ended.json()
+    assert ended.json()["card"]["lost_reason"] == "Chose a competitor", ended.json()
+    assert ended.json()["closed_at"] is not None
+    print(f"9d. a blank reason is refused ({said[:60]}…) and the real one lands on the card")
+
+    # 9e — a won card converts once, over the API
+    won_card = client.post(
+        cards_url, headers=headers, json={"customer_code": "ACME", "name": "API win", "owner": "jo"}
+    )
+    assert won_card.status_code == 201, won_card.text
+    won_id = won_card.json()["card"]["id"]
+    said = _refusal(
+        client.post(
+            f"{cards_url}/{won_id}/quotation", headers=headers, json={"number": "QUO-API-0"}
+        ),
+        "pipeline_error",
+    )
+    client.post(f"{cards_url}/{won_id}/moves", headers=headers, json={"to_stage": "Won"})
+    quoted = client.post(
+        f"{cards_url}/{won_id}/quotation",
+        headers=headers,
+        json={"number": "QUO-API-1", "issued_on": "2026-10-05"},
+    )
+    assert quoted.status_code == 201, quoted.text
+    assert quoted.json()["customer_code"] == "ACME", quoted.json()
+    assert quoted.json()["number"] == "QUO-API-1" and quoted.json()["issued_on"] == "2026-10-05"
+    again = _refusal(
+        client.post(
+            f"{cards_url}/{won_id}/quotation", headers=headers, json={"number": "QUO-API-2"}
+        ),
+        "pipeline_error",
+    )
+    print(f"9e. a non-won card is refused ({said[:40]}…), the win produced QUO-API-1, and a second is refused")
+
+    # 9f — an unknown card and an unauthorised caller are both named, not defaulted
+    said = _refusal(
+        client.post(
+            f"{cards_url}/{uuid.uuid4()}/moves", headers=headers, json={"to_stage": "Lead"}
+        ),
+        "pipeline_error",
+    )
+    nobody = client.post(
+        cards_url,
+        headers={**headers, "X-Actor": "stranger"},
+        json={"customer_code": "ACME", "name": "Nope", "owner": "jo"},
+    )
+    assert nobody.status_code == 403, nobody.text
+    assert _shape_error(nobody)["code"] == "forbidden", nobody.text
+    print(f"9f. an unknown card is refused by name ({said[:40]}…) and an unrolled caller gets 403")
+
+    # 9g — the board's cards carry the id they are addressed by, and a withheld field
+    # stays withheld in a mutation's answer too
+    as_intern = client.get(f"{BASE}/pipeline/board", headers=intern).json()
+    intern_cards = [one for column in as_intern for one in column["cards"]]
+    assert intern_cards, "the restricted viewer's board came back empty"
+    assert all("value" not in one for one in intern_cards), "a withheld value reached the board"
+    assert all("id" in one for one in intern_cards), "the card id is not addressable"
+    minted = client.post(
+        cards_url,
+        headers=intern,
+        json={"customer_code": "ACME", "name": "Intern deal", "owner": "intern", "value": "77"},
+    )
+    assert minted.status_code == 201, minted.text
+    assert "value" not in minted.json()["card"], (
+        "a mutation answered with a value the board withholds"
+    )
+    assert minted.json()["card"]["name"] == "Intern deal"
+    print(
+        f"9g. {len(intern_cards)} cards carry an id while `value` is withheld — on the board"
+        " and on a mutation's answer alike"
+    )
 
     print("check_pipeline: all assertions green")
     return 0

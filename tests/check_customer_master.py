@@ -11,12 +11,12 @@ Green on all seven:
    party record** — one identity, two roles, one tax number
 3. a second customer profile for the same party is refused: one identity, one profile
 4. contacts and addresses are validated **at entry** — a malformed e-mail, a blank
-   address line, an unknown address kind, a country that is not an ISO code and a
-   currency this company has not registered are all refused
+   address line, an unknown address kind, a country that is not two letters (including a
+   well-formed-looking `12`) and a currency this company has not registered are all refused
 5. the credit limit keeps **three** states, not two: `None` (no limit agreed), `0`
    (no credit at all) and a real ceiling are stored and read back differently, a
-   negative one and a float one are refused, and the database refuses a negative
-   one written by hand
+   negative one, a float one and a **non-finite** one (`Infinity`, `NaN`) are refused, and
+   the database refuses a negative one written by hand
 6. addresses are **reusable across documents** — two documents point at the *same*
    address row — and at most one primary stands per kind, with a new primary
    demoting the previous one while the database's partial index refuses a
@@ -211,6 +211,11 @@ def main() -> int:
         )
         session.rollback()
         said += " | " + _refused(
+            lambda: add_address(session, acme, kind="billing", line1="12 Rizal St", country="12"),
+            InvalidCustomerDataError,
+        )
+        session.rollback()
+        said += " | " + _refused(
             lambda: create_customer(
                 session,
                 company_id=COMPANY,
@@ -272,6 +277,18 @@ def main() -> int:
         session.rollback()
         said += " | " + _refused(
             lambda: set_credit_limit(session, acme, limit=25000.5), InvalidCustomerDataError
+        )
+        session.rollback()
+        # non-finite decimals are not one of the three documented states: Infinity
+        # would pass the sign test, and NaN would raise out of it
+        said += " | " + _refused(
+            lambda: set_credit_limit(session, acme, limit=Decimal("Infinity")),
+            InvalidCustomerDataError,
+        )
+        session.rollback()
+        said += " | " + _refused(
+            lambda: set_credit_limit(session, acme, limit=Decimal("NaN")),
+            InvalidCustomerDataError,
         )
         session.rollback()
         # the database refuses a negative ceiling written by hand, past the function.

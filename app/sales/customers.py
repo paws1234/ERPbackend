@@ -81,6 +81,12 @@ MONEY = Numeric(20, 6)
 # Loose but real: something@something.tld, and nothing with whitespace in it.
 _EMAIL = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
+# ISO 3166-1 alpha-2 is two letters. The *assigned* set is not enumerated here.
+# ponytail: a well-formed but unassigned code (`ZZ`) still passes. Ceiling: the
+# format guard only. Upgrade path: validate against the localization pack's own
+# country list once it carries one, which is where a market's codes belong.
+_ALPHA2 = re.compile(r"^[A-Z]{2}$")
+
 
 class CustomerError(ValueError):
     """The customer master refused what was asked of it."""
@@ -286,6 +292,13 @@ def _limit_value(limit: Any) -> Decimal | None:
         raise InvalidCustomerDataError(
             f"not a credit limit: {limit!r}; give an exact decimal, or null for no limit"
         ) from exc
+    if not value.is_finite():
+        # Infinity would pass the sign test and NaN would raise out of the comparison
+        # itself; neither is one of the three states the column is documented to hold.
+        raise InvalidCustomerDataError(
+            f"a credit limit must be a finite amount, not {value}; the states are null"
+            " (no limit agreed), 0 (no credit) and a positive ceiling"
+        )
     if value < 0:
         raise InvalidCustomerDataError(
             f"a credit limit is not negative: {value}; use null for no limit agreed,"
@@ -471,9 +484,10 @@ def add_address(
         country=None if country is None else _required(country, "a country").upper(),
         is_primary=bool(is_primary),
     )
-    if address.country is not None and len(address.country) != 2:
+    if address.country is not None and not _ALPHA2.match(address.country):
         raise InvalidCustomerDataError(
-            f"a country is an ISO 3166-1 alpha-2 code, not {address.country!r}"
+            f"a country is an ISO 3166-1 alpha-2 code — two letters — not"
+            f" {address.country!r}"
         )
     if address.is_primary:
         _demote(session, CustomerAddress, customer.id, kind=wanted)

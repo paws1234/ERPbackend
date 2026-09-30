@@ -56,7 +56,7 @@ from app.ledger.currency import register_currency, store_rate  # noqa: E402
 from app.ledger.mapping import mapped_account, set_mapping  # noqa: E402
 from app.ledger.posting import post_journal_entry  # noqa: E402
 from app.procurement import receipts as _receipts  # noqa: E402,F401 — the FK target
-from app.procurement.suppliers import create_supplier  # noqa: E402
+from app.procurement.suppliers import add_tax_identifier, create_supplier  # noqa: E402
 
 COMPANY = uuid.uuid4()
 OTHER = uuid.uuid4()
@@ -106,6 +106,8 @@ def main() -> int:
         # a second company's own books, to prove the comparison is per company
         other_supplier = create_supplier(session, company_id=OTHER, party_code="BETA",
                                          name="Beta", payment_terms_days=30)
+        add_tax_identifier(session, supplier, kind="tin", value="001-234-567")
+        add_tax_identifier(session, other_supplier, kind="tin", value="009-876-543")
         session.commit()
 
         def _invoice(number, *, net, currency=None, tax="0", company_id=COMPANY,

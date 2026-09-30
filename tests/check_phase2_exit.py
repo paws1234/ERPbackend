@@ -445,11 +445,11 @@ def main() -> int:
                 __import__("app.ledger.posting", fromlist=["JournalEntry"]).JournalEntry.currency == "PHP",
             )
         ).scalar()
-        assert Decimal(grni) == Decimal("10990.000000"), grni
+        assert Decimal(grni) == Decimal("-48.000000"), grni
         print("3. every entry in the cycle balances (the T-0.CORE.02 gate over the stored"
               f" ledger) and the AP subledger equals the payables control account"
-              f" ({report['currencies'][0]['control']}), with the receipts' counterpart"
-              f" sitting in 2050 ({grni}) rather than double-counting the liability")
+              f" ({report['currencies'][0]['control']}), with the 48.000000 overbilling"
+              f" debit retained in GRNI account 2050 ({grni})")
 
         # --- the cycle is complete, and nothing was re-keyed ---------------
         card = scorecard(session, supplier=acme)

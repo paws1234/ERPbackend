@@ -65,7 +65,7 @@ from app.procurement.requisitions import (  # noqa: E402
     submit as submit_requisition,
 )
 from app.procurement.rfq import issue_rfq, record_response  # noqa: E402
-from app.procurement.suppliers import create_supplier  # noqa: E402
+from app.procurement.suppliers import add_tax_identifier, create_supplier  # noqa: E402
 from app.workflow import APPROVE, RETURN, WrongApprover, WorkflowError, configure  # noqa: E402
 
 COMPANY = uuid.uuid4()
@@ -141,8 +141,9 @@ def main() -> int:
                   name="Purchase requisition", levels=[(Decimal("1"), "manager")])
         configure(session, company_id=COMPANY, doc_type="purchase_order",
                   name="Purchase order", levels=[(LIMIT, "manager"), (Decimal("10000"), "director")])
-        create_supplier(session, company_id=COMPANY, party_code="ACME",
-                        name="Acme Supplies", payment_terms_days=30)
+        supplier = create_supplier(session, company_id=COMPANY, party_code="ACME",
+                                   name="Acme Supplies", payment_terms_days=30)
+        add_tax_identifier(session, supplier, kind="tin", value="001-234-567")
         session.commit()
 
         # 1 — above the threshold: routed, and nothing may be received yet

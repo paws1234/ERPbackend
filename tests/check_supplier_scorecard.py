@@ -57,7 +57,7 @@ from app.procurement.scoring import (  # noqa: E402
     scorecards,
     scoring_weights,
 )
-from app.procurement.suppliers import create_supplier  # noqa: E402
+from app.procurement.suppliers import add_tax_identifier, create_supplier  # noqa: E402
 from app.stock.items import create_item  # noqa: E402
 from app.stock.locations import create_location  # noqa: E402
 from app.workflow import APPROVE, configure  # noqa: E402
@@ -150,8 +150,11 @@ def main() -> int:
                   name="Order", levels=[(Decimal("100000"), "manager")])
         for code, name in (("GOOD", "Good Supplier"), ("POOR", "Poor Supplier"),
                            ("NEW", "Never Bought From")):
-            create_supplier(session, company_id=COMPANY, party_code=code, name=name,
-                            payment_terms_days=30)
+            supplier = create_supplier(session, company_id=COMPANY, party_code=code, name=name,
+                                       payment_terms_days=30)
+            if code != "NEW":
+                add_tax_identifier(session, supplier, kind="tin",
+                                   value="001-234-567" if code == "GOOD" else "009-876-543")
         create_item(session, company_id=COMPANY, sku="WIDGET", name="Widget",
                     base_uom="each", traceability_mode="none")
         warehouse = create_location(session, company_id=COMPANY, code="MAIN",
@@ -253,11 +256,14 @@ def main() -> int:
         said = _refused(lambda: scoring_weights(on_time="-1"), ScoringError)
         said += " | " + _refused(lambda: scoring_weights(punctuality="1"), ScoringError)
         said += " | " + _refused(
-            lambda: scorecard(session, supplier=poor_supplier, weights={"on_time": Decimal(1)}),
+            lambda: scorecard(
+                session, supplier=poor_supplier,
+                weights={metric: Decimal(0) for metric in METRICS},
+            ),
             ScoringError,
         )
         print(f"3. equal weights by default, a 3/0/1/1 weighting changing the score to"
-              f" {weighted['score']}, and a negative weight/unknown metric/incomplete set"
+              f" {weighted['score']}, and a negative weight/unknown metric/zero-total set"
               f" refused: {said}")
 
         # 6 — a window narrows it

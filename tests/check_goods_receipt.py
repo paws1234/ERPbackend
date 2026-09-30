@@ -73,7 +73,7 @@ from app.procurement.requisitions import (  # noqa: E402
     submit as submit_requisition,
 )
 from app.procurement.rfq import issue_rfq, record_response  # noqa: E402
-from app.procurement.suppliers import create_supplier  # noqa: E402
+from app.procurement.suppliers import add_tax_identifier, create_supplier  # noqa: E402
 from app.stock.entries import on_hand  # noqa: E402
 from app.stock.items import create_item, item_by_sku  # noqa: E402
 from app.stock.locations import create_location, location_by_code  # noqa: E402
@@ -128,8 +128,9 @@ def main() -> int:
                   name="Purchase requisition", levels=[(Decimal("1"), "manager")])
         configure(session, company_id=COMPANY, doc_type="purchase_order",
                   name="Purchase order", levels=[(Decimal("1000"), "manager")])
-        create_supplier(session, company_id=COMPANY, party_code="ACME",
-                        name="Acme Supplies", payment_terms_days=30)
+        supplier = create_supplier(session, company_id=COMPANY, party_code="ACME",
+                                   name="Acme Supplies", payment_terms_days=30)
+        add_tax_identifier(session, supplier, kind="tin", value="001-234-567")
         item = create_item(session, company_id=COMPANY, sku="WIDGET", name="Widget",
                            base_uom="each", traceability_mode="none")
         warehouse = create_location(session, company_id=COMPANY, code="MAIN",

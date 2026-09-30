@@ -308,10 +308,6 @@ def create_invoice(
             )
         order_line_id = raw.get("order_line_id")
         receipt_line_id = raw.get("receipt_line_id")
-        if order is not None and (order_line_id is None or receipt_line_id is None):
-            raise InvoiceError(
-                "every linked invoice line must name both an order and receipt line"
-            )
         if order_line_id is not None or receipt_line_id is not None:
             if order is None or receipt is None or order_line_id is None or receipt_line_id is None:
                 raise InvoiceError("a linked invoice line names both an order and receipt line")

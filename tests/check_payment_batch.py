@@ -86,6 +86,7 @@ from app.procurement.requisitions import (  # noqa: E402
 from app.procurement.rfq import issue_rfq, record_response  # noqa: E402
 from app.procurement.suppliers import (  # noqa: E402
     add_bank_account,
+    add_tax_identifier,
     create_supplier,
 )
 from app.stock.items import create_item  # noqa: E402
@@ -216,10 +217,12 @@ def main() -> int:
                       price_percent="1", tax_percent="0.5")
         supplier = create_supplier(session, company_id=COMPANY, party_code="ACME",
                                    name="Acme Supplies", payment_terms_days=30)
+        add_tax_identifier(session, supplier, kind="tin", value="001-234-567")
         add_bank_account(session, supplier, bank_name="BPI", account_name="Acme Supplies",
                          account_number="1234567890", swift="BOPIPHMM", is_primary=True)
         bare = create_supplier(session, company_id=COMPANY, party_code="NOBANK",
                                name="No Bank Yet", payment_terms_days=30)
+        add_tax_identifier(session, bare, kind="tin", value="009-876-543")
         item = create_item(session, company_id=COMPANY, sku="WIDGET", name="Widget",
                            base_uom="each", traceability_mode="none")
         warehouse = create_location(session, company_id=COMPANY, code="MAIN",

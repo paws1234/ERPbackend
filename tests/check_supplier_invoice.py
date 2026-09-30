@@ -67,7 +67,7 @@ from app.procurement.requisitions import (  # noqa: E402
     submit as submit_requisition,
 )
 from app.procurement.rfq import issue_rfq, record_response  # noqa: E402
-from app.procurement.suppliers import create_supplier  # noqa: E402
+from app.procurement.suppliers import add_tax_identifier, create_supplier  # noqa: E402
 from app.stock.items import create_item  # noqa: E402
 from app.stock.locations import create_location  # noqa: E402
 from app.workflow import APPROVE, configure  # noqa: E402
@@ -115,9 +115,12 @@ def main() -> int:
         from tests.seed import seed_stock_accounts
 
         seed_stock_accounts(session, company_id=COMPANY)
+        create_account(session, company_id=COMPANY, code="2050",
+                       name="Goods Received Not Invoiced", account_class="liability")
         create_account(session, company_id=COMPANY, code="1310", name="Input VAT",
                        account_class="asset")
         session.commit()
+        set_mapping(session, company_id=COMPANY, key="stock_receipt", account_code="2050")
         set_mapping(session, company_id=COMPANY, key="payables", account_code="2000")
         set_mapping(session, company_id=COMPANY, key="input_tax", account_code="1310")
         set_mapping(session, company_id=COMPANY, key="expense", account_code="5200")
@@ -131,6 +134,7 @@ def main() -> int:
                   name="Order", levels=[(Decimal("100000"), "manager")])
         supplier = create_supplier(session, company_id=COMPANY, party_code="ACME",
                                    name="Acme Supplies", payment_terms_days=TERMS)
+        add_tax_identifier(session, supplier, kind="tin", value="001-234-567")
         item = create_item(session, company_id=COMPANY, sku="WIDGET", name="Widget",
                            base_uom="each", traceability_mode="none")
         warehouse = create_location(session, company_id=COMPANY, code="MAIN",
@@ -204,7 +208,7 @@ def main() -> int:
         assert entry.source_type == "supplier_invoice" and entry.source_id == invoice.id
         by_account = {line.account: line for line in entry.lines}
         assert by_account["2000"].credit == invoice.gross_amount, by_account["2000"]
-        assert by_account["1200"].debit == Decimal("1000.000000"), by_account["1200"]
+        assert by_account["2050"].debit == Decimal("1000.000000"), by_account["2050"]
         assert by_account["5200"].debit == Decimal("50.000000"), by_account["5200"]
         assert by_account["1310"].debit == Decimal("120.000000"), by_account["1310"]
         assert sum(line.debit for line in entry.lines) == sum(
@@ -214,8 +218,8 @@ def main() -> int:
         assert invoice.lines[0].order_line_id == order.lines[0].id
         print(f"1. AP-6001 posted {invoice.gross_amount} to the payables control account"
               f" on {INVOICE_DATE}, balanced (debits {sum(line.debit for line in entry.lines)})")
-        print(f"2. the stock line debited 1200 with 1000.000000 and the service line 5200"
-              f" with 50.000000; input tax 120.000000 went to 1310")
+        print(f"2. the received stock line debited GRNI 2050 with 1000.000000 and the"
+              f" service line 5200 with 50.000000; input tax 120.000000 went to 1310")
 
         # 5 — the due date
         assert invoice.due_date == INVOICE_DATE + timedelta(days=TERMS), invoice.due_date

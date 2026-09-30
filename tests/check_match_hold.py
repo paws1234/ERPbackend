@@ -76,7 +76,7 @@ from app.procurement.requisitions import (  # noqa: E402
     submit as submit_requisition,
 )
 from app.procurement.rfq import issue_rfq, record_response  # noqa: E402
-from app.procurement.suppliers import create_supplier  # noqa: E402
+from app.procurement.suppliers import add_tax_identifier, create_supplier  # noqa: E402
 from app.security import AccessDenied, assign, define_role, grant  # noqa: E402
 from app.stock.items import create_item  # noqa: E402
 from app.stock.locations import create_location  # noqa: E402
@@ -191,6 +191,7 @@ def main() -> int:
                       price_percent="1", tax_percent="0.5")
         supplier = create_supplier(session, company_id=COMPANY, party_code="ACME",
                                    name="Acme Supplies", payment_terms_days=30)
+        add_tax_identifier(session, supplier, kind="tin", value="001-234-567")
         # security: a clerk may not override, a controller may
         clerk = define_role(session, company_id=COMPANY, code="clerk", name="Clerk")
         grant(session, clerk, "invoice.post")
@@ -287,8 +288,8 @@ def main() -> int:
                           end=INVOICE_DATE)
         assert rate["considered"] == 2 and rate["matched"] == 1 and rate["partial"] == 1, rate
         assert rate["rate_percent"] == Decimal("50.0000"), rate
-        assert override_count(session, company_id=COMPANY, start=INVOICE_DATE,
-                              end=INVOICE_DATE) == 1
+        assert override_count(session, company_id=COMPANY, start=date(2026, 11, 30),
+                              end=date(2026, 11, 30)) == 1
         assert rate["rate_percent"] < Decimal("100")
         print(f"6. the rate stays {rate['rate_percent']} % (1 of 2 clean) while the"
               " override is counted separately, so paying it after an override is not"

@@ -71,7 +71,7 @@ from app.procurement.requisitions import (  # noqa: E402
     submit as submit_requisition,
 )
 from app.procurement.rfq import issue_rfq, record_response  # noqa: E402
-from app.procurement.suppliers import create_supplier  # noqa: E402
+from app.procurement.suppliers import add_tax_identifier, create_supplier  # noqa: E402
 from app.stock.entries import StockLedgerEntry, on_hand  # noqa: E402
 from app.stock.items import create_item  # noqa: E402
 from app.stock.locations import create_location  # noqa: E402
@@ -130,6 +130,7 @@ def main() -> int:
                   name="Order", levels=[(Decimal("100000"), "manager")])
         supplier = create_supplier(session, company_id=COMPANY, party_code="ACME",
                                    name="Acme Supplies", payment_terms_days=30)
+        add_tax_identifier(session, supplier, kind="tin", value="001-234-567")
         item = create_item(session, company_id=COMPANY, sku="WIDGET", name="Widget",
                            base_uom="each", traceability_mode="none")
         warehouse = create_location(session, company_id=COMPANY, code="MAIN",
@@ -188,7 +189,9 @@ def main() -> int:
             supplier_reference="ACME-7001", invoice_date=INVOICE_DATE,
             order_id=order.id, receipt_id=receipt.id,
             lines=[{"description": "Widgets", "item_id": item.id, "quantity": "10",
-                    "unit_price": "100", "tax_amount": "120.00"}],
+                    "unit_price": "100", "tax_amount": "120.00",
+                    "order_line_id": order.lines[0].id,
+                    "receipt_line_id": receipt.lines[0].id}],
         )
         session.commit()
         post_invoice(session, invoice)

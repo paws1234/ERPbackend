@@ -113,10 +113,7 @@ def scorecard(
     window, and otherwise the four figures, the weights used and the documents each
     figure came from.
     """
-    chosen = dict(weights or EQUAL_WEIGHTS)
-    missing = [metric for metric in METRICS if metric not in chosen]
-    if missing:
-        raise ScoringError(f"a scorecard weighs every metric; missing {', '.join(missing)}")
+    chosen = scoring_weights(**(weights or {}))
 
     rows = [
         row
@@ -134,6 +131,26 @@ def scorecard(
             "inputs": [],
         }
 
+    # Several receipts may deliver one order line.  Score that line once, using
+    # accumulated accepted/rejected quantities, rather than rewarding split receipts.
+    grouped: dict[uuid.UUID, dict[str, Any]] = {}
+    for order, receipt, line in rows:
+        group = grouped.setdefault(
+            line.order_line_id,
+            {
+                "order": order,
+                "receipt": receipt,
+                "order_line_id": line.order_line_id,
+                "line_no": line.line_no,
+                "quantity": Decimal(0),
+                "rejected": Decimal(0),
+            },
+        )
+        group["quantity"] += line.quantity
+        group["rejected"] += line.rejected_quantity
+        if receipt.received_on >= group["receipt"].received_on:
+            group["receipt"] = receipt
+
     on_time_hits = 0
     ordered = Decimal(0)
     received = Decimal(0)
@@ -143,14 +160,20 @@ def scorecard(
     estimate_base = Decimal(0)
     inputs = []
 
-    for order, receipt, line in rows:
-        order_line: PurchaseOrderLine = line.order_line
+    for group in grouped.values():
+        order = group["order"]
+        receipt = group["receipt"]
+        order_line: PurchaseOrderLine = session.get(
+            PurchaseOrderLine, group["order_line_id"]
+        )
+        received_quantity = group["quantity"]
+        rejected_quantity = group["rejected"]
         punctual = receipt.received_on <= order.required_date
         on_time_hits += 1 if punctual else 0
         ordered += order_line.quantity
-        received += line.quantity
-        accepted += line.quantity
-        rejected += line.rejected_quantity
+        received += received_quantity
+        accepted += received_quantity
+        rejected += rejected_quantity
         # price: what was awarded against what the requisition estimated
         estimated = _estimated_price(session, order_line)
         if estimated is not None and estimated > 0:
@@ -160,13 +183,13 @@ def scorecard(
             {
                 "order": order.number,
                 "receipt": receipt.number,
-                "line_no": line.line_no,
+                "line_no": group["line_no"],
                 "required_on": order.required_date,
                 "received_on": receipt.received_on,
                 "punctual": punctual,
                 "ordered": order_line.quantity,
-                "received_quantity": line.quantity,
-                "rejected_quantity": line.rejected_quantity,
+                "received_quantity": received_quantity,
+                "rejected_quantity": rejected_quantity,
                 "awarded_unit_price": order_line.unit_price,
                 "estimated_unit_price": estimated,
             }
@@ -174,13 +197,13 @@ def scorecard(
 
     delivered = accepted + rejected
     metrics = {
-        "on_time": _percent(Decimal(on_time_hits), Decimal(len(rows))),
+        "on_time": _percent(Decimal(on_time_hits), Decimal(len(grouped))),
         "quantity": _percent(
             min(ordered, received) if ordered > 0 else received, ordered
         ),
         "quality": _percent(accepted, delivered) if delivered > 0 else Decimal(100),
         "price": (
-            _percent(estimate_base - estimate_gap, estimate_base)
+            _percent(max(Decimal(0), estimate_base - estimate_gap), estimate_base)
             if estimate_base > 0
             else Decimal(100)
         ),

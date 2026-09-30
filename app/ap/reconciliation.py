@@ -64,7 +64,7 @@ def subledger_balance(
         statement = statement.where(SupplierInvoice.invoice_date <= as_of)
     total = Decimal(0)
     for invoice in session.scalars(statement):
-        total += open_amount(session, invoice)
+        total += open_amount(session, invoice, as_of=as_of)
     return total.quantize(MONEY_SCALE)
 
 
@@ -104,17 +104,30 @@ def control_balance(
 
 
 def currencies_in_use(session: Session, *, company_id: uuid.UUID) -> list[str]:
-    """Every currency a posted invoice of this company is stated in, in order."""
-    rows = session.scalars(
+    """Every currency present in either the invoice subledger or control account."""
+    invoice_rows = session.scalars(
         select(SupplierInvoice.currency)
         .where(
             SupplierInvoice.company_id == company_id,
             SupplierInvoice.status == "posted",
         )
         .distinct()
-        .order_by(SupplierInvoice.currency)
     )
-    return [str(row) for row in rows]
+    try:
+        account = mapped_account(session, company_id=company_id, key=PAYABLES_KEY)
+    except ValueError:
+        control_rows = ()
+    else:
+        control_rows = session.scalars(
+            select(JournalEntry.currency)
+            .join(JournalLine, JournalLine.entry_id == JournalEntry.id)
+            .where(
+                JournalEntry.company_id == company_id,
+                JournalLine.account_id == account.id,
+            )
+            .distinct()
+        )
+    return sorted({str(row) for row in (*invoice_rows, *control_rows)})
 
 
 def reconcile(

@@ -373,6 +373,9 @@ def execute_batch(
         raise BatchStateError(
             f"batch {batch.number!r} is {batch.status}; only an approved batch is executed"
         )
+    # Generate and validate the exact bank file before the first journal entry or
+    # settlement is flushed.  A missing account must not leave a half-paid batch.
+    bank_file(session, batch)
     day = executed_on or batch.scheduled_on
     payables = mapped_account(session, company_id=batch.company_id, key=PAYABLES_KEY).code
     bank = mapped_account(session, company_id=batch.company_id, key=BANK_KEY).code
@@ -436,6 +439,11 @@ def bank_file(session: Session, batch: PaymentBatch) -> str:
         invoice = line.invoice
         supplier: Supplier = invoice.supplier
         account = primary_bank_account(supplier)
+        if account is not None and account.currency is not None and account.currency != invoice.currency:
+            raise PaymentError(
+                f"bank account for invoice {invoice.number!r} is in {account.currency},"
+                f" not the invoice currency {invoice.currency}"
+            )
         values = {
             "payee_name": supplier.party.name,
             "payee_account": None if account is None else account.account_number,

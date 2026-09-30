@@ -34,6 +34,7 @@ from sqlalchemy import (
     Date,
     DateTime,
     ForeignKey,
+    Index,
     Numeric,
     String,
     Text,
@@ -41,6 +42,7 @@ from sqlalchemy import (
     Uuid,
     func,
     select,
+    text,
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, Session, mapped_column, relationship
@@ -255,6 +257,20 @@ def match_invoice(
         )
     limits = tolerance(session, company_id=invoice.company_id)
     day = on or invoice.invoice_date
+    from app.procurement.orders import PurchaseOrder
+    from app.procurement.receipts import GoodsReceipt
+
+    order = session.get(PurchaseOrder, invoice.order_id) if invoice.order_id else None
+    receipt = session.get(GoodsReceipt, invoice.receipt_id) if invoice.receipt_id else None
+    header_chain_ok = (
+        order is not None
+        and receipt is not None
+        and order.company_id == invoice.company_id
+        and receipt.company_id == invoice.company_id
+        and order.supplier_id == invoice.supplier_id
+        and receipt.order_id == order.id
+        and receipt.status == "posted"
+    )
 
     findings: list[dict] = []
     quantity_ok = price_ok = tax_ok = True
@@ -279,7 +295,16 @@ def match_invoice(
             if line.receipt_line_id is not None
             else None
         )
-        if order_line is None or receipt_line is None:
+        chain_ok = (
+            order_line is not None
+            and receipt_line is not None
+            and header_chain_ok
+            and order_line.order_id == invoice.order_id
+            and receipt_line.receipt_id == invoice.receipt_id
+            and receipt_line.order_line_id == order_line.id
+            and line.item_id == order_line.item_id
+        )
+        if not chain_ok:
             finding["problems"].append(
                 {
                     "dimension": "linkage",
@@ -325,7 +350,9 @@ def match_invoice(
 
         # The tax the pack's rule implies for what was ordered, so the comparison is on
         # the same basis the documents were taxed on (T-2.PROC.08).
-        implied = tax_on(order_line.unit_price * line.quantity)["tax"]
+        implied = tax_on(
+            order_line.unit_price * line.quantity, document_type="supplier_invoice"
+        )["tax"]
         expected_tax += implied
         finding["expected_tax"] = implied
         ok, difference = _within(line.tax_amount, implied, limits.tax_percent)
@@ -521,8 +548,14 @@ class MatchHold(Base):
     __tablename__ = "match_hold"
     __table_args__ = (
         CheckConstraint("state IN ('held', 'released')", name="ck_match_hold_state"),
-        # One open hold per invoice: two would be two answers to "why is this held".
-        UniqueConstraint("invoice_id", "state", name="uq_match_hold_open"),
+        # Only an open hold is unique.  Resolved history may contain many overrides.
+        Index(
+            "uq_match_hold_open",
+            "invoice_id",
+            unique=True,
+            postgresql_where=text("state = 'held'"),
+            sqlite_where=text("state = 'held'"),
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
@@ -724,6 +757,12 @@ def override_count(
     somebody overrode the match is not a clean match, and a rate that counted it as one
     would hide exactly the thing the metric exists to show.
     """
-    return len(
-        holds(session, company_id=company_id, state=RELEASED, start=start, end=end)
+    statement = select(func.count(MatchHold.id)).where(
+        MatchHold.company_id == company_id,
+        MatchHold.state == RELEASED,
     )
+    if start is not None:
+        statement = statement.where(MatchHold.resolved_on >= start)
+    if end is not None:
+        statement = statement.where(MatchHold.resolved_on <= end)
+    return int(session.scalar(statement) or 0)

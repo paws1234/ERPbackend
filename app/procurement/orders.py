@@ -57,6 +57,7 @@ from app.stock.items import Item
 from app.procurement.requisitions import Requisition, require_sourceable
 from app.procurement.rfq import Rfq, RfqResponse, RfqResponseLine, responses as rfq_responses
 from app.procurement.suppliers import Supplier, supplier_by_code
+from app.procurement.tax import require_supplier_tax
 from app.workflow import (
     APPROVED as WF_APPROVED,
     PENDING as WF_PENDING,
@@ -294,6 +295,9 @@ def award(
     by_number = {line.line_no: line for line in rfq.lines}
     orders: list[PurchaseOrder] = []
 
+    stated_override = (
+        str(override_reason).strip() if override_reason is not None else None
+    )
     for entry in awards:
         raw = dict(entry)
         supplier = supplier_by_code(
@@ -342,7 +346,7 @@ def award(
             if quantity <= 0:
                 raise OrderError(f"an awarded quantity is above zero, got {quantity}")
             already = awarded_quantity(session, asked.id)
-            if already + quantity > asked.quantity and not override_reason:
+            if already + quantity > asked.quantity and not stated_override:
                 raise OverAwardError(
                     f"line {line_no} of RFQ {rfq.number!r} asked for {asked.quantity}"
                     f" and {already} is already awarded; awarding {quantity} more needs"
@@ -362,7 +366,7 @@ def award(
             required_date=raw["required_date"],
             status=DRAFT,
             revision_no=1,
-            over_award_reason=override_reason,
+            over_award_reason=stated_override,
         )
         session.add(order)
         session.flush()
@@ -449,6 +453,7 @@ def submit_order(session: Session, order: PurchaseOrder, *, actor: str) -> Purch
         )
     if not order.lines:
         raise OrderError(f"purchase order {order.number!r} has no lines")
+    require_supplier_tax(session, order.supplier, document_type="purchase_order")
     request = start_approval(
         session,
         company_id=order.company_id,
@@ -486,6 +491,7 @@ def decide_order(
         raise OrderStateError(
             f"purchase order {order.number!r} names an approval request that is gone"
         )
+    require_supplier_tax(session, order.supplier, document_type="purchase_order")
     workflow_decide(session, request, actor=actor, action=action, role=role, reason=reason)
     order.status = _FROM_ENGINE[request.state]
     if order.status == APPROVED:
@@ -574,6 +580,7 @@ def amend(
                 quantity=quantity,
                 uom=line.uom,
                 unit_price=price,
+                received_quantity=line.received_quantity,
                 rfq_line_id=line.rfq_line_id,
                 requisition_line_id=line.requisition_line_id,
             )

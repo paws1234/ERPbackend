@@ -106,12 +106,28 @@ class Report:
         self.buckets = buckets
         self.invoices = rows
         self.totals: dict[str, Decimal] = {label: Decimal(0) for label, _, _ in buckets}
+        self.totals_by_currency: dict[str, dict[str, Decimal]] = {}
         for row in rows:
             self.totals[row["bucket"]] += row["open_amount"]
+            currency_totals = self.totals_by_currency.setdefault(
+                row["currency"],
+                {label: Decimal(0) for label, _, _ in buckets},
+            )
+            currency_totals[row["bucket"]] += row["open_amount"]
         self.totals = {
             label: value.quantize(MONEY_SCALE) for label, value in self.totals.items()
         }
         self.total = sum(self.totals.values(), Decimal(0)).quantize(MONEY_SCALE)
+        self.totals_by_currency = {
+            currency: {
+                label: value.quantize(MONEY_SCALE) for label, value in totals.items()
+            }
+            for currency, totals in self.totals_by_currency.items()
+        }
+        self.total_by_currency = {
+            currency: sum(totals.values(), Decimal(0)).quantize(MONEY_SCALE)
+            for currency, totals in self.totals_by_currency.items()
+        }
 
     @property
     def bucket_labels(self) -> list[str]:
@@ -119,13 +135,15 @@ class Report:
 
     def by_supplier(self) -> list[dict]:
         """The same figures per supplier — what a collections list is worked from."""
-        grouped: dict[str, dict] = {}
+        grouped: dict[tuple[str, str], dict] = {}
         for row in self.invoices:
+            key = (row["supplier"], row["currency"])
             entry = grouped.setdefault(
-                row["supplier"],
+                key,
                 {
                     "supplier": row["supplier"],
                     "supplier_name": row["supplier_name"],
+                    "currency": row["currency"],
                     "buckets": {label: Decimal(0) for label in self.bucket_labels},
                     "total": Decimal(0),
                 },
@@ -140,7 +158,18 @@ class Report:
             }
             entry["total"] = entry["total"].quantize(MONEY_SCALE)
             ordered.append(entry)
-        return sorted(ordered, key=lambda entry: entry["supplier"])
+        return sorted(ordered, key=lambda entry: (entry["supplier"], entry["currency"]))
+
+    def by_currency(self) -> list[dict]:
+        """Totals kept separate so unlike currencies are never presented as one balance."""
+        return [
+            {
+                "currency": currency,
+                "buckets": dict(totals),
+                "total": self.total_by_currency[currency],
+            }
+            for currency, totals in sorted(self.totals_by_currency.items())
+        ]
 
 
 def aging(
@@ -157,8 +186,10 @@ def aging(
     moment = as_of or date.today()
     chosen = checked_buckets(buckets)
     rows = []
-    for invoice in open_invoices(session, company_id=company_id, supplier=supplier):
-        outstanding = open_amount(session, invoice)
+    for invoice in open_invoices(
+        session, company_id=company_id, supplier=supplier, as_of=moment
+    ):
+        outstanding = open_amount(session, invoice, as_of=moment)
         if outstanding <= 0:
             continue  # settled: it is not an open balance, so it is not aged
         days = (moment - invoice.due_date).days
@@ -173,7 +204,7 @@ def aging(
                 "bucket": _bucket_for(days, chosen),
                 "currency": invoice.currency,
                 "gross_amount": invoice.gross_amount,
-                "settled": settled_amount(session, invoice),
+                "settled": settled_amount(session, invoice, as_of=moment),
                 "open_amount": outstanding,
             }
         )
@@ -201,5 +232,13 @@ def aging_csv(report: Report) -> str:
     for label, low, high in report.buckets:
         span = f"{low}+" if high is None else (f"{low}" if low == high else f"{low}-{high}")
         lines.append(f"{label} ({span} days),,,{report.totals[label]}")
+    if len(report.totals_by_currency) > 1:
+        for currency, totals in sorted(report.totals_by_currency.items()):
+            for label, low, high in report.buckets:
+                span = f"{low}+" if high is None else (
+                    f"{low}" if low == high else f"{low}-{high}"
+                )
+                lines.append(f"{currency} {label} ({span} days),,,{totals[label]}")
+            lines.append(f"{currency} total as at {report.as_of},,,{report.total_by_currency[currency]}")
     lines.append(f"total as at {report.as_of},,,{report.total}")
     return "\n".join(lines) + "\n"

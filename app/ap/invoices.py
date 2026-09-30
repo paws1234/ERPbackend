@@ -68,6 +68,7 @@ PAYABLES_KEY = "payables"
 INPUT_TAX_KEY = "input_tax"
 EXPENSE_KEY = "expense"
 INVENTORY_KEY = "inventory"
+GRNI_KEY = "stock_receipt"
 
 
 class InvoiceError(ValueError):
@@ -271,6 +272,26 @@ def create_invoice(
     if not entries:
         raise InvoiceError(f"invoice {wanted!r} has no lines")
 
+    # A linked invoice is a claim on one coherent procurement chain.  Resolve the
+    # headers before creating the invoice so a bad link cannot leave a half-document.
+    order = receipt = None
+    if order_id is not None or receipt_id is not None:
+        if order_id is None or receipt_id is None:
+            raise InvoiceError("an invoice chain names both an order and a receipt")
+        from app.procurement.orders import PurchaseOrder
+        from app.procurement.receipts import GoodsReceipt
+
+        order = session.get(PurchaseOrder, order_id)
+        receipt = session.get(GoodsReceipt, receipt_id)
+        if order is None or order.company_id != company_id:
+            raise InvoiceError("the invoice names no purchase order in this company")
+        if receipt is None or receipt.company_id != company_id:
+            raise InvoiceError("the invoice names no goods receipt in this company")
+        if order.supplier_id != supplier.id or receipt.order_id != order.id:
+            raise InvoiceError("the invoice order, receipt and supplier are not one chain")
+        if receipt.status != POSTED:
+            raise InvoiceError("the invoice receipt must be posted")
+
     terms = supplier.payment_terms_days if terms_days is None else int(terms_days)
 
     # The totals are computed from the stated lines **before** the row exists, so a
@@ -285,6 +306,27 @@ def create_invoice(
                 f"a line states a positive quantity, a non-negative price and tax; got"
                 f" {quantity}, {price}, {tax}"
             )
+        order_line_id = raw.get("order_line_id")
+        receipt_line_id = raw.get("receipt_line_id")
+        if order_line_id is not None or receipt_line_id is not None:
+            if order is None or receipt is None or order_line_id is None or receipt_line_id is None:
+                raise InvoiceError("a linked invoice line names both an order and receipt line")
+            from app.procurement.orders import PurchaseOrderLine
+            from app.procurement.receipts import GoodsReceiptLine
+
+            order_line = session.get(PurchaseOrderLine, order_line_id)
+            receipt_line = session.get(GoodsReceiptLine, receipt_line_id)
+            if (
+                order_line is None
+                or receipt_line is None
+                or order_line.order_id != order.id
+                or receipt_line.receipt_id != receipt.id
+                or receipt_line.order_line_id != order_line.id
+                or raw.get("item_id") != order_line.item_id
+            ):
+                raise InvoiceError(
+                    "the invoice line's order and receipt links do not form its document chain"
+                )
         checked.append((raw, quantity, price, tax))
     net = sum(
         ((quantity * price).quantize(Decimal("0.000001")) for _, quantity, price, _ in checked),
@@ -366,9 +408,18 @@ def post_invoice(
             f"invoice {invoice.number!r} is already posted; posting it again would"
             " double the liability"
         )
+    from app.procurement.tax import require_supplier_tax
+
+    require_supplier_tax(session, invoice.supplier, document_type="supplier_invoice")
     lines: list[dict[str, Any]] = []
     for line in invoice.lines:
-        key = INVENTORY_KEY if line.item_id is not None else EXPENSE_KEY
+        # A received stock line reverses GRNI; inventory was already debited by the
+        # receipt.  Only an unreceived stock purchase is booked to inventory here.
+        key = (
+            GRNI_KEY
+            if line.receipt_line_id is not None
+            else (INVENTORY_KEY if line.item_id is not None else EXPENSE_KEY)
+        )
         lines.append(
             {"account": mapped_account(session, company_id=invoice.company_id, key=key).code,
              "debit": line_net(line)}
@@ -407,23 +458,28 @@ def post_invoice(
     return entry
 
 
-def settled_amount(session: Session, invoice: SupplierInvoice) -> Decimal:
+def settled_amount(
+    session: Session, invoice: SupplierInvoice, *, as_of: date | None = None
+) -> Decimal:
     """How much of the invoice has been settled, from the settlement rows themselves."""
-    total = session.scalar(
-        select(func.coalesce(func.sum(SupplierInvoiceSettlement.amount), 0)).where(
-            SupplierInvoiceSettlement.invoice_id == invoice.id
-        )
+    statement = select(func.coalesce(func.sum(SupplierInvoiceSettlement.amount), 0)).where(
+        SupplierInvoiceSettlement.invoice_id == invoice.id
     )
+    if as_of is not None:
+        statement = statement.where(SupplierInvoiceSettlement.settled_on <= as_of)
+    total = session.scalar(statement)
     return _amount(total or 0).quantize(Decimal("0.000001"))
 
 
-def open_amount(session: Session, invoice: SupplierInvoice) -> Decimal:
+def open_amount(
+    session: Session, invoice: SupplierInvoice, *, as_of: date | None = None
+) -> Decimal:
     """What is still owed on the invoice — the total less what settled it.
 
     The one figure T-2.AP.02 ages, T-2.AP.04 selects for payment and T-2.AP.05
     reconciles against the control account: derived, so the three cannot disagree.
     """
-    return (invoice.gross_amount - settled_amount(session, invoice)).quantize(
+    return (invoice.gross_amount - settled_amount(session, invoice, as_of=as_of)).quantize(
         Decimal("0.000001")
     )
 
@@ -450,6 +506,16 @@ def settle(
     value = _amount(amount)
     if value <= 0:
         raise InvoiceError(f"a settlement is above zero, got {value}")
+    # Lock the invoice row before deriving the ceiling.  Two payment workers must not
+    # both observe the same open amount and append settlements over it.
+    locked = session.scalar(
+        select(SupplierInvoice)
+        .where(SupplierInvoice.id == invoice.id)
+        .with_for_update()
+    )
+    if locked is None:  # pragma: no cover - the caller supplied a persistent invoice
+        raise InvoiceError(f"invoice {invoice.number!r} no longer exists")
+    invoice = locked
     outstanding = open_amount(session, invoice)
     if value > outstanding:
         raise OverSettlementError(
@@ -470,7 +536,11 @@ def settle(
 
 
 def open_invoices(
-    session: Session, *, company_id: uuid.UUID, supplier: Supplier | None = None
+    session: Session,
+    *,
+    company_id: uuid.UUID,
+    supplier: Supplier | None = None,
+    as_of: date | None = None,
 ) -> list[SupplierInvoice]:
     """Every posted invoice of this company, oldest first — the aging population.
 
@@ -483,6 +553,8 @@ def open_invoices(
     )
     if supplier is not None:
         statement = statement.where(SupplierInvoice.supplier_id == supplier.id)
+    if as_of is not None:
+        statement = statement.where(SupplierInvoice.invoice_date <= as_of)
     return list(
         session.scalars(statement.order_by(SupplierInvoice.due_date, SupplierInvoice.number))
     )

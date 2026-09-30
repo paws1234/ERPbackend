@@ -135,6 +135,9 @@ class DebitNote(Base):
     status: Mapped[str] = mapped_column(String(16), nullable=False, default=DRAFT)
     # Why the note goes beyond the invoice's open amount. Null means it did not.
     over_note_reason: Mapped[str | None] = mapped_column(Text)
+    # Credit on the supplier account not applied to this invoice when the override
+    # exceeds its open amount.
+    unapplied_amount: Mapped[Decimal] = mapped_column(MONEY, nullable=False, default=Decimal(0))
     journal_entry_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("journal_entry.id"), index=True
     )
@@ -180,6 +183,11 @@ class DebitNoteLine(Base):
     # The stock ledger entry a return produced for this line, where it produced one.
     movement_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("stock_ledger_entry.id"), index=True
+    )
+    # The invoice line this return gives back.  Keeping the link makes the quantity
+    # ceiling derivable across multiple notes instead of trusting the note header.
+    invoice_line_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("supplier_invoice_line.id"), index=True
     )
 
     note: Mapped[DebitNote] = relationship(back_populates="lines")
@@ -252,10 +260,12 @@ def create_debit_note(
         currency=currency_by_code(
             session, company_id=invoice.company_id, code=invoice.currency
         ).code,
+        unapplied_amount=Decimal(0),
         status=DRAFT,
     )
     session.add(note)
     session.flush()
+    invoice_lines = list(invoice.lines)
     for raw in entries:
         quantity = _amount(raw["quantity"])
         price = _amount(raw["unit_price"])
@@ -265,6 +275,45 @@ def create_debit_note(
                 f"a line states a positive quantity, a non-negative price and tax; got"
                 f" {quantity}, {price}, {tax}"
             )
+        invoice_line_id = raw.get("invoice_line_id")
+        if wanted == RETURN:
+            if invoice_line_id is None:
+                candidates = [
+                    candidate
+                    for candidate in invoice_lines
+                    if candidate.item_id == raw.get("item_id")
+                ]
+                if len(candidates) == 1:
+                    invoice_line_id = candidates[0].id
+                else:
+                    raise DebitNoteError(
+                        f"return line for {stated!r} must name exactly one invoice line"
+                    )
+            invoice_line = next(
+                (candidate for candidate in invoice_lines if candidate.id == invoice_line_id),
+                None,
+            )
+            if (
+                invoice_line is None
+                or invoice_line.invoice_id != invoice.id
+                or invoice_line.item_id != raw.get("item_id")
+            ):
+                raise DebitNoteError(
+                    f"return line for {stated!r} does not belong to invoice {invoice.number!r}"
+                )
+            already = session.scalar(
+                select(func.coalesce(func.sum(DebitNoteLine.quantity), 0))
+                .join(DebitNote, DebitNote.id == DebitNoteLine.note_id)
+                .where(
+                    DebitNoteLine.invoice_line_id == invoice_line.id,
+                    DebitNote.status == POSTED,
+                )
+            )
+            if _amount(already or 0) + quantity > invoice_line.quantity:
+                raise DebitNoteError(
+                    f"return quantity for invoice line {invoice_line.line_no} exceeds"
+                    f" its invoiced quantity of {invoice_line.quantity}"
+                )
         note.lines.append(
             DebitNoteLine(
                 company_id=invoice.company_id,
@@ -276,6 +325,7 @@ def create_debit_note(
                 uom=str(raw.get("uom", "each")),
                 unit_price=price,
                 tax_amount=tax,
+                invoice_line_id=invoice_line_id,
             )
         )
     session.flush()
@@ -314,7 +364,44 @@ def post_debit_note(
         )
     if note.gross_amount > outstanding:
         note.over_note_reason = str(over_note_reason).strip()
+        note.unapplied_amount = (note.gross_amount - outstanding).quantize(
+            Decimal("0.000001")
+        )
 
+    if note.kind == RETURN:
+        current_by_invoice_line: dict[uuid.UUID, Decimal] = {}
+        for line in note.lines:
+            if line.invoice_line_id is None:
+                raise DebitNoteError(
+                    f"return line {line.line_no} of {note.number!r} has no invoice line"
+                )
+            invoice_line = next(
+                (candidate for candidate in invoice.lines if candidate.id == line.invoice_line_id),
+                None,
+            )
+            if invoice_line is None:
+                raise DebitNoteError(
+                    f"return line {line.line_no} of {note.number!r} names another invoice"
+                )
+            already = session.scalar(
+                select(func.coalesce(func.sum(DebitNoteLine.quantity), 0))
+                .join(DebitNote, DebitNote.id == DebitNoteLine.note_id)
+                .where(
+                    DebitNoteLine.invoice_line_id == invoice_line.id,
+                    DebitNote.status == POSTED,
+                    DebitNote.id != note.id,
+                )
+            )
+            current_by_invoice_line[invoice_line.id] = (
+                current_by_invoice_line.get(invoice_line.id, Decimal(0)) + line.quantity
+            )
+            if _amount(already or 0) + current_by_invoice_line[invoice_line.id] > invoice_line.quantity:
+                raise DebitNoteError(
+                    f"return quantity for invoice line {invoice_line.line_no} exceeds"
+                    f" its invoiced quantity of {invoice_line.quantity}"
+                )
+
+    return_costs: dict[uuid.UUID, Decimal] = {}
     # A return takes the stock out first, so a location that does not hold it refuses
     # the whole note before anything is posted.
     if note.kind == RETURN:
@@ -335,16 +422,36 @@ def post_debit_note(
                     f"{note.location.code} holds {held} of the item on line"
                     f" {line.line_no}; returning {line.quantity} would take it negative"
                 )
+            return_costs[line.id] = value_issue(
+                session,
+                company_id=note.company_id,
+                item=session.get(Item, line.item_id),
+                quantity=line.quantity,
+                location_id=note.location_id,
+            )
 
     lines: list[dict[str, Any]] = []
     for line in note.lines:
         key = INVENTORY_KEY if line.item_id is not None else EXPENSE_KEY
+        amount = return_costs.get(line.id, note_net(line))
         lines.append(
             {
                 "account": mapped_account(session, company_id=note.company_id, key=key).code,
-                "credit": note_net(line),
+                "credit": amount,
             }
         )
+        if note.kind == RETURN:
+            variance = (note_net(line) - amount).quantize(Decimal("0.000001"))
+            if variance != 0:
+                variance_account = mapped_account(
+                    session, company_id=note.company_id, key="stock_issue"
+                ).code
+                lines.append(
+                    {
+                        "account": variance_account,
+                        ("credit" if variance > 0 else "debit"): abs(variance),
+                    }
+                )
     if note.tax_amount > 0:
         lines.append(
             {
@@ -376,13 +483,7 @@ def post_debit_note(
     if note.kind == RETURN:
         for line in note.lines:
             item = session.get(Item, line.item_id)
-            cost = value_issue(
-                session,
-                company_id=note.company_id,
-                item=item,
-                quantity=line.quantity,
-                location_id=note.location_id,
-            )
+            cost = return_costs[line.id]
             movement = record_movement(
                 session,
                 item=item,

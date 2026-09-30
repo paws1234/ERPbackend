@@ -145,7 +145,11 @@ def tax_on(basis: Any, *, document_type: str | None = None) -> dict:
     then carry the same figure by construction. `amount_from` (T-0.LOC.01) does the
     arithmetic — one rounding rule for the whole platform.
     """
-    rule = procurement_rule() if document_type is None else rules_for(document_type)[0]
+    # Even when a caller names the document, procurement documents share one basis.
+    # Resolve that shared rule so a future pack cannot make the three-way chain diverge.
+    if document_type is not None and document_type not in PROCUREMENT_DOCUMENTS:
+        rules_for(document_type)  # raises the pack's explicit no-rule error
+    rule = procurement_rule()
     amount = basis if isinstance(basis, Decimal) else Decimal(str(basis))
     if amount < 0:
         raise TaxError(f"tax is computed on an amount, not {amount}")
@@ -179,7 +183,11 @@ def findings(session: Session, supplier: Supplier, *, document_type: str) -> lis
     ]
     if blank:
         problems.append(f"blank tax identifier value(s): {', '.join(sorted(blank))}")
-    rule = procurement_rule() if document_type not in PROCUREMENT_DOCUMENTS else rules_for(document_type)[0]
+    rule = (
+        rules_for(document_type)[0]
+        if document_type not in PROCUREMENT_DOCUMENTS
+        else procurement_rule()
+    )
     if _rate(rule) > 0 and REQUIRED_IDENTIFIER not in held:
         problems.append(
             f"no {REQUIRED_IDENTIFIER} is recorded for {supplier.party.code!r}, but"

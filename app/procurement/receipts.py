@@ -59,6 +59,7 @@ from app.procurement.orders import (
     PurchaseOrderLine,
     require_approved,
 )
+from app.procurement.tax import require_supplier_tax
 from app.stock.entries import StockLedgerEntry, movements_for_source
 from app.stock.locations import Location
 from app.stock.transactions import receive
@@ -283,6 +284,7 @@ def post_receipt(
         )
     order = receipt.order
     require_approved(session, order)
+    require_supplier_tax(session, order.supplier, document_type="goods_receipt")
     over = False
     for line in receipt.lines:
         order_line = line.order_line

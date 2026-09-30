@@ -1054,8 +1054,12 @@ def post_entry(
             body=json.dumps(body),
         )
     )
+    response = JSONResponse(
+        status_code=201,
+        content=_visible_entry(session, context, body),
+    )
     session.commit()
-    return JSONResponse(status_code=201, content=_visible_entry(session, context, body))
+    return response
 
 
 @app.get(f"{BASE}/journal-entries", response_model=PageOut, tags=["ledger"])

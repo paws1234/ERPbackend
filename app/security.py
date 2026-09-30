@@ -289,6 +289,24 @@ def require(
     )
 
 
+def hidden_fields(
+    session: Session, *, company_id: uuid.UUID, subject: str, entity: str
+) -> set[str]:
+    """The fields of `entity` this subject may not read.
+
+    Split out of `readable_fields` so a caller filtering many payloads at once — a
+    board of cards, a list endpoint — reads the restrictions **once** rather than
+    putting an identical query behind every row.
+    """
+    return {
+        restriction.field
+        for restriction in _restrictions(
+            session, company_id=company_id, subject=subject, entity=entity
+        )
+        if not restriction.can_read
+    }
+
+
 def readable_fields(
     session: Session,
     *,
@@ -302,13 +320,9 @@ def readable_fields(
     Absent rather than nulled: a field the caller may not see must not be
     mistaken for one that is simply empty.
     """
-    hidden = {
-        restriction.field
-        for restriction in _restrictions(
-            session, company_id=company_id, subject=subject, entity=entity
-        )
-        if not restriction.can_read
-    }
+    hidden = hidden_fields(
+        session, company_id=company_id, subject=subject, entity=entity
+    )
     return {field: value for field, value in payload.items() if field not in hidden}
 
 

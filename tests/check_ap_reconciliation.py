@@ -14,8 +14,10 @@ Green on all seven:
    naming the currency — never corrected here
 5. the comparison is **per currency**: a USD invoice is compared against the USD entry
    it produced, and its difference is reported separately from the PHP one
-6. the period narrows the control side, so a reconciliation for a period that includes
-   nothing reports the whole open balance as a difference rather than silently agreeing
+6. a **period** is a window on the same balance, not a balance of its own: the control
+   side is re-stated as the opening balance plus what the period moved, so a window
+   that contains a whole posting still reconciles (and still reports the injected
+   difference, rather than turning it into a different one)
 7. nothing to compare says so, and a date cutoff on the subledger is honoured
 
 **Scratch database only**: it drops and recreates the public schema.
@@ -223,14 +225,31 @@ def main() -> int:
         assert broken["difference_total"] == Decimal("300.000000")
         print(f"4. the injected 300.00 is reported, not absorbed: {explain(broken)}")
 
-        # 6 — the period narrows the control side only
+        # 6 — a period is a window on the same balance: opening balance + movement
         windowed = reconcile(session, company_id=COMPANY, as_of=date(2026, 11, 30),
-                             start=date(2026, 11, 26))
-        assert windowed["currencies"][0]["control"] == Decimal("0.000000"), windowed
+                             start=date(2026, 11, 20))
+        row = windowed["currencies"][0]
+        assert row["opening"] == Decimal("620.000000"), row
+        assert row["movement"] == Decimal("280.000000"), row
+        assert row["control"] == broken["currencies"][0]["control"], row
+        assert row["difference"] == broken["currencies"][0]["difference"], row
         assert windowed["balanced"] is False
-        assert windowed["currencies"][0]["difference"] == Decimal("600.000000")
-        print("6. a period starting after the last posting reads a control balance of"
-              " 0.000000 against an open 600.000000 — reported, not quietly agreed")
+        print(f"6. the same figures stated as a period: opening {row['opening']} +"
+              f" movement {row['movement']} = {row['control']}, exactly what the"
+              f" un-windowed reconciliation reads (difference {row['difference']})")
+
+        # and a period over books with nothing wrong in it agrees — "for any period"
+        clean = reconcile(session, company_id=OTHER, as_of=date(2026, 11, 30),
+                          start=date(2026, 11, 1))
+        clean_row = clean["currencies"][0]
+        assert clean_row["opening"] == Decimal("0.000000"), clean_row
+        assert clean_row["movement"] == Decimal("5000.000000"), clean_row
+        assert clean_row["control"] == clean_row["subledger"] == Decimal("5000.000000"), \
+            clean_row
+        assert clean["balanced"] is True, clean
+        print(f"    a period with nothing wrong in it reconciles too: opening"
+              f" {clean_row['opening']} + movement {clean_row['movement']} ="
+              f" {clean_row['control']} against a subledger of {clean_row['subledger']}")
 
         # 7 — a currency with nothing in it reads nil on both sides, and a company
         # with no invoices at all says there is nothing to compare

@@ -16,6 +16,11 @@ Three things about how it does that:
   both sides are in the document's own currency. Comparing in the base currency would
   mean choosing a rate for a comparison neither side stored — and a reconciliation that
   depends on today's rate is a reconciliation that changes when the rate does.
+* **A period is a window on a balance, not a balance of its own.** What the control
+  account holds at a period's end is what it held *before* the period plus what the
+  period moved, and :func:`reconcile` reports the opening balance and the movement
+  separately so a period reads as a balance like any other. It therefore agrees with
+  the subledger "for any period", which is the criterion it is closed on.
 * **The subledger is built from the settlements, not from a balance.** What an invoice
   is owed is T-2.AP.01's derived `open_amount`, so a payment (T-2.AP.04) or a debit
   note (T-2.AP.03) moves both sides of this comparison by construction.
@@ -24,7 +29,7 @@ Three things about how it does that:
 from __future__ import annotations
 
 import uuid
-from datetime import date
+from datetime import date, timedelta
 from decimal import Decimal
 from typing import Any
 
@@ -143,6 +148,13 @@ def reconcile(
     Returns one row per currency with both figures, the difference and whether it is
     nil, plus an overall verdict. `difference` is what it is — a mismatch is a number to
     investigate, never a correction made here.
+
+    `as_of` and `start` bound the comparison in the way a report reads naturally: the
+    subledger is a balance as at `as_of`, and when `start` is given the control side is
+    re-stated as **opening balance + movement** over the period — the same balance, with
+    where it came from. The two figures are then still balance against balance, so a
+    period that contains a whole posting reconciles instead of reporting the pre-period
+    balance as a difference.
     """
     wanted = list(currencies or currencies_in_use(session, company_id=company_id))
     rows = []
@@ -150,15 +162,35 @@ def reconcile(
         subledger = subledger_balance(
             session, company_id=company_id, currency=currency, as_of=as_of
         )
-        control = control_balance(
-            session, company_id=company_id, currency=currency, as_of=as_of, start=start
-        )
+        if start is None:
+            opening: Decimal | None = None
+            movement: Decimal | None = None
+            control = control_balance(
+                session, company_id=company_id, currency=currency, as_of=as_of
+            )
+        else:
+            opening = control_balance(
+                session,
+                company_id=company_id,
+                currency=currency,
+                as_of=start - timedelta(days=1),
+            )
+            movement = control_balance(
+                session,
+                company_id=company_id,
+                currency=currency,
+                as_of=as_of,
+                start=start,
+            )
+            control = (opening + movement).quantize(MONEY_SCALE)
         difference = (subledger - control).quantize(MONEY_SCALE)
         rows.append(
             {
                 "currency": str(currency),
                 "subledger": subledger,
                 "control": control,
+                "opening": opening,
+                "movement": movement,
                 "difference": difference,
                 "balanced": difference == 0,
             }

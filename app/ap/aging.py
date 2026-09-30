@@ -12,6 +12,11 @@ built around exactly those:
   they are a parameter and the report carries them: a bucket boundary nobody can see
   is a number nobody can argue with. The default below is a five-band one and is
   labelled as this platform's default, not as a fact about the business.
+* **The total is stated against the control account.** The task's third criterion is
+  *the report total equals the AP control account balance*, which a reader can only
+  check if the report says what the control account holds — so the report carries it,
+  per currency (:meth:`Report.compare_to_control`), and shows the difference rather
+  than absorbing one.
 
 Partial settlement needs no special handling: a bucket holds what is **open**, and
 `open_amount` is the invoice total less what has settled it, so a partial payment
@@ -27,6 +32,10 @@ from typing import Any, Iterable
 from sqlalchemy.orm import Session
 
 from app.ap.invoices import SupplierInvoice, open_amount, open_invoices, settled_amount
+# The payables control account is read through T-2.AP.05's own reader rather than
+# re-derived here: it is the same figure the reconciliation compares, so the two can
+# never drift apart.
+from app.ap.reconciliation import control_balance
 from app.procurement.suppliers import Supplier
 
 # One money scale for the whole platform.
@@ -128,6 +137,33 @@ class Report:
             currency: sum(totals.values(), Decimal(0)).quantize(MONEY_SCALE)
             for currency, totals in self.totals_by_currency.items()
         }
+        # Filled by `compare_to_control`; a report nobody compared keeps them empty.
+        self.control: dict[str, Decimal] = {}
+        self.difference: dict[str, Decimal] = {}
+
+    def compare_to_control(self, session: Session, *, company_id: uuid.UUID) -> None:
+        """State the payables control account beside the subledger total, per currency.
+
+        The control figure is **read from the ledger**, never kept here, so the two
+        sides' only shared input is the postings themselves. The comparison is per
+        currency for the same reason T-2.AP.05's reconciliation is: both sides are in
+        the document's own currency, and mixing them would need a rate neither stored.
+        """
+        self.control = {
+            currency: control_balance(
+                session, company_id=company_id, currency=currency, as_of=self.as_of
+            )
+            for currency in self.total_by_currency
+        }
+        self.difference = {
+            currency: (self.total_by_currency[currency] - held).quantize(MONEY_SCALE)
+            for currency, held in self.control.items()
+        }
+
+    @property
+    def balanced(self) -> bool:
+        """Whether the subledger total and the control account agree, per currency."""
+        return all(value == 0 for value in self.difference.values())
 
     @property
     def bucket_labels(self) -> list[str]:
@@ -208,7 +244,9 @@ def aging(
                 "open_amount": outstanding,
             }
         )
-    return Report(as_of=moment, buckets=chosen, rows=rows)
+    report = Report(as_of=moment, buckets=chosen, rows=rows)
+    report.compare_to_control(session, company_id=company_id)
+    return report
 
 
 def aging_csv(report: Report) -> str:
@@ -241,4 +279,8 @@ def aging_csv(report: Report) -> str:
                 lines.append(f"{currency} {label} ({span} days),,,{totals[label]}")
             lines.append(f"{currency} total as at {report.as_of},,,{report.total_by_currency[currency]}")
     lines.append(f"total as at {report.as_of},,,{report.total}")
+    for currency, held in sorted(report.control.items()):
+        prefix = f"{currency} " if len(report.control) > 1 else ""
+        lines.append(f"{prefix}control account as at {report.as_of},,,{held}")
+        lines.append(f"{prefix}subledger less control,,,{report.difference[currency]}")
     return "\n".join(lines) + "\n"

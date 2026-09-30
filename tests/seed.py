@@ -30,6 +30,7 @@ USUAL_ACCOUNTS: dict[str, tuple[str, str, str | None]] = {
     "1200": ("Inventory", "asset", None),
     "1210": ("Inventory — Raw Materials", "asset", "1200"),
     "2000": ("Accounts Payable", "liability", None),
+    "2010": ("Goods Received Not Invoiced", "liability", "2000"),
     "3000": ("Capital Stock", "equity", None),
     "4000": ("Sales Revenue", "income", None),
     "4100": ("Service Revenue", "income", None),
@@ -43,9 +44,17 @@ USUAL_ACCOUNTS: dict[str, tuple[str, str, str | None]] = {
 # The account mappings a stock movement posts through (T-1.INV.07): the inventory
 # account and one counterpart per kind of movement. A company points them at its
 # own accounts; these are the pack's.
+#
+# `stock_receipt` is the pack's **2010 Goods Received Not Invoiced**, not the payables
+# control account: a receipt books the liability for goods that have arrived but not
+# been invoiced, and a supplier invoice clears that same account again (T-2.AP.01 posts
+# a received line's cost to this key too, which is what reverses it). Pointing the
+# receipt at 2000 instead credits the control account directly, and once the invoice
+# credits 2000 as well the same liability is booked twice — the control account then no
+# longer agrees with the AP subledger that T-2.AP.05 reconciles against it.
 STOCK_MAPPINGS = {
     "inventory": "1200",
-    "stock_receipt": "2000",
+    "stock_receipt": "2010",
     "stock_issue": "5000",
     "stock_adjustment": "5900",
 }

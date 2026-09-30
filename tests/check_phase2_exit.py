@@ -9,7 +9,9 @@ modules every earlier task built and checks the five things the ledger's gate na
 
 1. a requisition runs through approval → RFQ → comparative statement → automated PO →
    GRN → supplier invoice → 3-way match → payment batch → settlement with **no manual
-   re-keying**: every figure in the chain is carried from the document that decided it
+   re-keying**: every figure in the chain is carried from the document that decided it,
+   and the comparative statement is read back through the published route the frontend
+   repository renders it from before the award consumes the prices it states
 2. the 3-way match rate is **measured on the exercised dataset** and reported against
    the > 95 % target — including that a window containing only clean matches does reach
    the target, so the metric can be met and not merely computed
@@ -29,11 +31,14 @@ import uuid
 from datetime import date
 from decimal import Decimal
 
-from sqlalchemy import create_engine, select
+from fastapi.testclient import TestClient
+from sqlalchemy import create_engine, func, select
 from sqlalchemy.orm import Session
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from app.api import BASE, app  # noqa: E402
+from app.ap.aging import aging  # noqa: E402
 from app.ap.invoices import create_invoice, open_amount, post_invoice  # noqa: E402
 from app.ap.payments import (  # noqa: E402
     EXECUTED,
@@ -49,6 +54,7 @@ from app.db import Base  # noqa: E402
 from app.ledger.accounts import create_account  # noqa: E402
 from app.ledger.currency import register_currency  # noqa: E402
 from app.ledger.mapping import set_mapping  # noqa: E402
+from app.ledger.posting import JournalEntry, JournalLine  # noqa: E402
 from app.matching import (  # noqa: E402
     MATCHED,
     InvoiceHeldError,
@@ -149,22 +155,19 @@ def main() -> int:
         session.commit()
         from tests.seed import seed_stock_accounts
 
+        # The seed maps `stock_receipt` to the pack's own **2010 Goods Received Not
+        # Invoiced**: a receipt credits 2010 and the supplier invoice's received line
+        # debits it back (T-2.AP.01 posts that line through the same key), so a receipt
+        # never touches the payables control account and the control account agrees
+        # with the AP subledger in step 3 below. The gate installs **no** mapping of its
+        # own here — it uses the seed's, so step 3 is evidence about the default rather
+        # than about a substitution the gate made for itself.
         seed_stock_accounts(session, company_id=COMPANY)
         create_account(session, company_id=COMPANY, code="1310", name="Input VAT",
                        account_class="asset")
-        # **The receipt's counterpart is NOT the payables control account.** The Phase 1
-        # seed maps `stock_receipt` to 2000, which books the liability when goods
-        # arrive — correct only while nothing else posts the same liability. Phase 2
-        # posts the supplier invoice to `payables`, so a receipt credited there too
-        # would double it and the control account would stop agreeing with the
-        # subledger. The receipt therefore gets its own liability account, which is what
-        # "goods received not invoiced" is for (T-1.ACCT.03's mapping is configuration).
-        create_account(session, company_id=COMPANY, code="2050",
-                       name="Goods Received Not Invoiced", account_class="liability")
         session.commit()
         for key, code in (("payables", "2000"), ("input_tax", "1310"),
-                          ("expense", "5200"), ("bank", "1010"),
-                          ("stock_receipt", "2050")):
+                          ("expense", "5200"), ("bank", "1010")):
             set_mapping(session, company_id=COMPANY, key=key, account_code=code)
         configure(session, company_id=COMPANY, doc_type="purchase_requisition",
                   name="Requisition", levels=[(Decimal("1000"), "manager")])
@@ -178,6 +181,11 @@ def main() -> int:
                                  name="Controller")
         grant(session, controller, "match.override", "payment.run")
         assign(session, company_id=COMPANY, subject="fin.ada", role=controller)
+        # The comparative statement is read through the published route in step 1c, so
+        # the buyer needs a role that may read an RFQ at all.
+        buyer = define_role(session, company_id=COMPANY, code="buyer", name="Buyer")
+        grant(session, buyer, "rfq.read")
+        assign(session, company_id=COMPANY, subject="bob.buyer", role=buyer)
         acme = create_supplier(session, company_id=COMPANY, party_code="ACME",
                                name="Acme Supplies", payment_terms_days=30)
         add_bank_account(session, acme, bank_name="BPI", account_name="Acme Supplies",
@@ -258,6 +266,39 @@ def main() -> int:
               f" (late), CHIRP silent — the comparison states its basis"
               f" ({basis['rule_code']} at {basis['rate_percent']}%)")
 
+        # --- 1. the comparative statement, read through the published route --------
+        # The matrix T-2.PROC.04 renders in the frontend repository reads exactly this
+        # payload (`GET {BASE}/rfqs/{{number}}`), so this is the statement the buyer
+        # decides on — and the prices it states are the ones `award` below reads.
+        client = TestClient(app, raise_server_exceptions=False)
+        read = client.get(
+            f"{BASE}/rfqs/RFQ-G1",
+            headers={"X-Company-Id": str(COMPANY), "X-Actor": "bob.buyer"},
+        )
+        assert read.status_code == 200, read.text
+        statement = read.json()
+        assert statement["basis"]["base_currency"] == "PHP", statement["basis"]
+        assert statement["basis"]["tax_rule_code"] == basis["rule_code"], statement["basis"]
+        assert Decimal(statement["basis"]["tax_rate_percent"]) == Decimal(
+            str(basis["rate_percent"])
+        ), statement["basis"]
+        stated = {supplier["code"]: supplier for supplier in statement["suppliers"]}
+        assert set(stated) == {"ACME", "BOREAL", "CHIRP"}, stated
+        assert stated["CHIRP"]["responded"] is False and stated["CHIRP"]["lines"] == [], stated
+        assert stated["BOREAL"]["late"] is True and stated["ACME"]["late"] is False, stated
+        quoted_price = {
+            (code, line["line_no"]): Decimal(line["unit_price"])
+            for code, supplier in stated.items()
+            for line in supplier["lines"]
+        }
+        assert quoted_price[("ACME", 1)] == Decimal("100.000000"), quoted_price
+        assert quoted_price[("ACME", 2)] == Decimal("50.000000"), quoted_price
+        assert quoted_price[("BOREAL", 2)] == Decimal("48.000000"), quoted_price
+        print(f"1c. the comparative statement states all three invitees side by side on"
+              f" its labelled basis ({statement['basis']['tax_rule_code']} at"
+              f" {statement['basis']['tax_rate_percent']}%): ACME 100/50, BOREAL 48 on"
+              f" line 2, CHIRP blank")
+
         orders = award(
             session, rfq=rfq, actor="bob.buyer",
             awards=[
@@ -272,14 +313,25 @@ def main() -> int:
         acme_order, boreal_order = orders
         assert order_total(acme_order) == Decimal("10750.000000")
         assert acme_order.lines[0].unit_price == Decimal("100.00")
+        # the hand-off, stated rather than assumed: every awarded price is the winning
+        # supplier's own quoted price in the statement above — nothing re-keyed. A PO
+        # line numbers itself, so the link back to the quote is `rfq_line_id`.
+        rfq_line_no = {line.id: line.line_no for line in rfq.lines}
+        for order, code in ((acme_order, "ACME"), (boreal_order, "BOREAL")):
+            assert order.supplier.party.code == code, order.supplier.party.code
+            for line in order.lines:
+                from_rfq = rfq_line_no[line.rfq_line_id]
+                assert line.unit_price == quoted_price[(code, from_rfq)], (
+                    code, from_rfq, line.unit_price
+                )
         assert remaining_awardable(session, rfq) == {
             1: Decimal("0.000000"), 2: Decimal("0.000000")
         }, remaining_awardable(session, rfq)
         assert order_total(boreal_order) == Decimal("240.000000")
         assert len(orders_for_rfq(session, rfq)) == 2
-        print(f"1c. award generated PO-G1 ({order_total(acme_order)} from ACME's own"
+        print(f"1d. award generated PO-G1 ({order_total(acme_order)} from ACME's own"
               f" quote) and PO-G2 ({order_total(boreal_order)} from BOREAL's) with no"
-              " re-keying")
+              " re-keying — every line's price is the one the statement carries")
 
         for order in (acme_order, boreal_order):
             submit_order(session, order, actor="bob.buyer")
@@ -289,7 +341,7 @@ def main() -> int:
                              role="director")
                 session.commit()
         assert acme_order.status == APPROVED and acme_order.approved_by == "dan.director"
-        print(f"1d. both orders approved through their own chain"
+        print(f"1e. both orders approved through their own chain"
               f" ({acme_order.status}/{boreal_order.status})")
 
         # --- 1. GRN --------------------------------------------------------
@@ -403,6 +455,17 @@ def main() -> int:
                              invoice_numbers=["AP-G1", "AP-G2"])
         session.commit()
         assert batch.total_amount == Decimal("12362.560000"), batch.total_amount
+        # T-2.AP.02's criterion on this cycle: the aging report's own total, stated
+        # against the payables control account, is what the batch is about to settle.
+        # The receipts are not in it — they sit in GRNI 2010, clear of the control
+        # account, which is the whole point of the seed's mapping.
+        aged = aging(session, company_id=COMPANY, as_of=RUN_ON)
+        assert aged.total == batch.total_amount, (aged.total, batch.total_amount)
+        assert aged.control == {"PHP": aged.total}, aged.control
+        assert aged.balanced is True, aged.difference
+        print(f"    the aging report reads {aged.total} — the control account's own"
+              f" balance (difference {aged.difference['PHP']}), which is what the batch"
+              " settles")
         submit_batch(session, batch, actor="fin.ada")
         session.commit()
         if batch.status == "pending":
@@ -428,28 +491,22 @@ def main() -> int:
         assert report["currencies"][0]["subledger"] == Decimal("0.000000"), report
         assert report["currencies"][0]["control"] == Decimal("0.000000"), report
         # the receipts' counterpart sits where it belongs, waiting to be invoiced
-        grni = session.execute(
-            select(__import__("sqlalchemy", fromlist=["func"]).func.coalesce(
-                __import__("sqlalchemy", fromlist=["func"]).func.sum(
-                    __import__("app.ledger.posting", fromlist=["JournalLine"]).JournalLine.credit
-                    - __import__("app.ledger.posting", fromlist=["JournalLine"]).JournalLine.debit
-                ), 0
-            ))
-            .select_from(__import__("app.ledger.posting", fromlist=["JournalLine"]).JournalLine)
-            .join(__import__("app.ledger.posting", fromlist=["JournalEntry"]).JournalEntry,
-                  __import__("app.ledger.posting", fromlist=["JournalEntry"]).JournalEntry.id
-                  == __import__("app.ledger.posting", fromlist=["JournalLine"]).JournalLine.entry_id)
+        grni = session.scalar(
+            select(func.coalesce(func.sum(JournalLine.credit - JournalLine.debit), 0))
+            .select_from(JournalLine)
+            .join(JournalEntry, JournalEntry.id == JournalLine.entry_id)
             .where(
-                __import__("app.ledger.posting", fromlist=["JournalEntry"]).JournalEntry.company_id == COMPANY,
-                __import__("app.ledger.posting", fromlist=["JournalLine"]).JournalLine.account == "2050",
-                __import__("app.ledger.posting", fromlist=["JournalEntry"]).JournalEntry.currency == "PHP",
+                JournalEntry.company_id == COMPANY,
+                JournalLine.account == "2010",
+                JournalEntry.currency == "PHP",
             )
-        ).scalar()
+        )
         assert Decimal(grni) == Decimal("-48.000000"), grni
         print("3. every entry in the cycle balances (the T-0.CORE.02 gate over the stored"
               f" ledger) and the AP subledger equals the payables control account"
               f" ({report['currencies'][0]['control']}), with the 48.000000 overbilling"
-              f" debit retained in GRNI account 2050 ({grni})")
+              f" debit retained in GRNI account 2010 ({grni}) — the seed's own mapping,"
+              " installed with no substitution by this check")
 
         # --- the cycle is complete, and nothing was re-keyed ---------------
         card = scorecard(session, supplier=acme)

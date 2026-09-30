@@ -115,12 +115,12 @@ def main() -> int:
         from tests.seed import seed_stock_accounts
 
         seed_stock_accounts(session, company_id=COMPANY)
-        create_account(session, company_id=COMPANY, code="2050",
-                       name="Goods Received Not Invoiced", account_class="liability")
         create_account(session, company_id=COMPANY, code="1310", name="Input VAT",
                        account_class="asset")
         session.commit()
-        set_mapping(session, company_id=COMPANY, key="stock_receipt", account_code="2050")
+        # `stock_receipt` is left as the seed maps it (`2010 Goods Received Not
+        # Invoiced`, the pack's own account): a receipt credits it and the invoice's
+        # received line debits it back, so the payables control account stays clear.
         set_mapping(session, company_id=COMPANY, key="payables", account_code="2000")
         set_mapping(session, company_id=COMPANY, key="input_tax", account_code="1310")
         set_mapping(session, company_id=COMPANY, key="expense", account_code="5200")
@@ -208,7 +208,7 @@ def main() -> int:
         assert entry.source_type == "supplier_invoice" and entry.source_id == invoice.id
         by_account = {line.account: line for line in entry.lines}
         assert by_account["2000"].credit == invoice.gross_amount, by_account["2000"]
-        assert by_account["2050"].debit == Decimal("1000.000000"), by_account["2050"]
+        assert by_account["2010"].debit == Decimal("1000.000000"), by_account["2010"]
         assert by_account["5200"].debit == Decimal("50.000000"), by_account["5200"]
         assert by_account["1310"].debit == Decimal("120.000000"), by_account["1310"]
         assert sum(line.debit for line in entry.lines) == sum(
@@ -218,7 +218,7 @@ def main() -> int:
         assert invoice.lines[0].order_line_id == order.lines[0].id
         print(f"1. AP-6001 posted {invoice.gross_amount} to the payables control account"
               f" on {INVOICE_DATE}, balanced (debits {sum(line.debit for line in entry.lines)})")
-        print(f"2. the received stock line debited GRNI 2050 with 1000.000000 and the"
+        print(f"2. the received stock line debited GRNI 2010 with 1000.000000 and the"
               f" service line 5200 with 50.000000; input tax 120.000000 went to 1310")
 
         # 5 — the due date

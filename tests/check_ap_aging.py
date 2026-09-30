@@ -3,7 +3,7 @@
     DATABASE_URL=postgresql+psycopg://postgres:postgres@localhost:5432/erpv1 \
         python tests/check_ap_aging.py
 
-Green on all seven:
+Green on all eight:
 
 1. every open invoice is aged into the right bucket, and each aged amount **traces to
    that invoice** — number, supplier, due date, days past due and what is open
@@ -17,6 +17,8 @@ Green on all seven:
 6. per supplier, the same figures add back up to the company total
 7. the export carries one row per aged invoice plus the bucket totals, with the buckets
    named
+8. the report's total **is** the payables control account balance, stated beside it on
+   the report and the export, and an injected difference is reported — never absorbed
 
 **Scratch database only**: it drops and recreates the public schema.
 """
@@ -47,6 +49,7 @@ from app.db import Base  # noqa: E402
 from app.ledger.accounts import create_account  # noqa: E402
 from app.ledger.currency import register_currency  # noqa: E402
 from app.ledger.mapping import set_mapping  # noqa: E402
+from app.ledger.posting import post_journal_entry  # noqa: E402
 from app.procurement import receipts as _receipts  # noqa: E402,F401 — the FK target
 from app.procurement.suppliers import add_tax_identifier, create_supplier  # noqa: E402
 
@@ -81,6 +84,24 @@ def _invoice(session, supplier, number, *, invoice_date, terms, amount, tax="0",
     if settle_amount is not None:
         settle(session, invoice, amount=settle_amount, settled_on=invoice.invoice_date,
                source_type="payment_batch", source_id=BATCH)
+        # The settlement record is T-2.AP.01's; the money leaving the bank is the
+        # batch's posting (T-2.AP.04), which is what takes the amount out of the
+        # control account. Without it the ledger would still show the whole invoice
+        # as owed and the control-account comparison below would be comparing a
+        # settled invoice against an unsettled account.
+        post_journal_entry(
+            session,
+            company_id=COMPANY,
+            posting_date=invoice.invoice_date,
+            currency=invoice.currency,
+            memo=f"payment of {number}",
+            source_type="payment_batch",
+            source_id=BATCH,
+            lines=[
+                {"account": "2000", "debit": Decimal(settle_amount)},
+                {"account": "1010", "credit": Decimal(settle_amount)},
+            ],
+        )
         session.commit()
     return invoice
 
@@ -106,6 +127,8 @@ def main() -> int:
         session.commit()
         create_account(session, company_id=COMPANY, code="2000", name="Accounts Payable",
                        account_class="liability")
+        create_account(session, company_id=COMPANY, code="1010", name="Cash in Bank",
+                       account_class="asset")
         create_account(session, company_id=COMPANY, code="5200", name="Rent Expense",
                        account_class="expense")
         set_mapping(session, company_id=COMPANY, key="payables", account_code="2000")
@@ -225,6 +248,41 @@ def main() -> int:
         narrowed = aging(session, company_id=COMPANY, as_of=AS_OF, supplier=boreal)
         assert {row["supplier"] for row in narrowed.invoices} == {"BOREAL"}
         assert narrowed.total == Decimal("700.000000")
+
+        # 8 — the report total IS the control account balance, and a difference is
+        # reported rather than absorbed
+        assert report.total == Decimal("1450.000000"), report.total
+        assert report.control == {"PHP": Decimal("1450.000000")}, report.control
+        assert report.difference == {"PHP": Decimal("0.000000")}, report.difference
+        assert report.balanced is True
+        assert "control account as at" in csv and "subledger less control" in csv
+        assert f"control account as at {AS_OF},,,{report.control['PHP']}" in csv, csv
+        print(f"8. the report total {report.total} is what the payables control account"
+              f" itself holds ({report.control['PHP']}, difference"
+              f" {report.difference['PHP']}) — and both are stated on the export")
+
+        post_journal_entry(
+            session,
+            company_id=COMPANY,
+            posting_date=date(2026, 12, 20),
+            currency="PHP",
+            memo="an entry somebody posted straight to the control account",
+            source_type="manual",
+            source_id=uuid.uuid4(),
+            lines=[
+                {"account": "2000", "credit": Decimal("300.00")},
+                {"account": "5200", "debit": Decimal("300.00")},
+            ],
+        )
+        session.commit()
+        broken = aging(session, company_id=COMPANY, as_of=AS_OF)
+        assert broken.total == report.total, broken.total  # the subledger is unmoved
+        assert broken.control == {"PHP": Decimal("1750.000000")}, broken.control
+        assert broken.difference == {"PHP": Decimal("-300.000000")}, broken.difference
+        assert broken.balanced is False
+        print(f"    an injected 300.00 straight to the control account is reported as a"
+              f" difference of {broken.difference['PHP']}, not absorbed")
+
         assert just_due.id and future.id and settled_all.id and older.id and sixty.id and thirty.id
 
     print("check_ap_aging: all assertions green")

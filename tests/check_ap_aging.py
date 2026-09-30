@@ -48,7 +48,7 @@ from app.ledger.accounts import create_account  # noqa: E402
 from app.ledger.currency import register_currency  # noqa: E402
 from app.ledger.mapping import set_mapping  # noqa: E402
 from app.procurement import receipts as _receipts  # noqa: E402,F401 — the FK target
-from app.procurement.suppliers import create_supplier  # noqa: E402
+from app.procurement.suppliers import add_tax_identifier, create_supplier  # noqa: E402
 
 COMPANY = uuid.uuid4()
 AS_OF = date(2026, 12, 31)
@@ -115,6 +115,8 @@ def main() -> int:
                                name="Acme Supplies", payment_terms_days=30)
         boreal = create_supplier(session, company_id=COMPANY, party_code="BOREAL",
                                  name="Boreal Trading", payment_terms_days=0)
+        add_tax_identifier(session, acme, kind="tin", value="001-234-567")
+        add_tax_identifier(session, boreal, kind="tin", value="009-876-543")
         session.commit()
 
         # due dates: 2026-12-31 (day 0), 2026-12-01 (30), 2026-11-01 (60),
@@ -127,7 +129,7 @@ def main() -> int:
                          terms=30, amount="300.00")
         older = _invoice(session, boreal, "AP-D", invoice_date=date(2026, 9, 1),
                          terms=30, amount="400.00")
-        future = _invoice(session, acme, "AP-E", invoice_date=date(2027, 1, 15),
+        future = _invoice(session, acme, "AP-E", invoice_date=date(2026, 12, 15),
                           terms=30, amount="500.00")
         settled_all = _invoice(session, acme, "AP-F", invoice_date=date(2026, 11, 15),
                                terms=30, amount="60.00", settle_amount="60.00")

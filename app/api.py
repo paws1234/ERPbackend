@@ -96,7 +96,20 @@ from app.ledger.posting import (
     UnbalancedEntryError,
     post_journal_entry,
 )
+from app.localization import packs as installed_packs, tax_rules as pack_tax_rules
 from app.party import UnknownPartyError
+from app.procurement.requisitions import (
+    RequisitionError,
+    requisition_by_number,
+)
+from app.procurement.rfq import (
+    RfqError,
+    invited as rfq_invited,
+    issue_rfq,
+    record_response as record_rfq_response,
+    responses as rfq_responses,
+    rfq_by_number,
+)
 from app.reporting import (
     DEFAULT_CAPABILITY as DEFAULT_REPORT_CAPABILITY,
     ReportDefinition,
@@ -609,6 +622,18 @@ async def _currency_error(_request: Request, exc: CurrencyError) -> JSONResponse
     return _error(422, "currency_error", str(exc))
 
 
+# The procurement documents' own refusals (T-2.PROC.01…): an unapproved requisition,
+# a locked one, an RFQ line nobody asked about. Domain rules, all client errors.
+@app.exception_handler(RequisitionError)
+async def _requisition_error(_request: Request, exc: RequisitionError) -> JSONResponse:
+    return _error(422, "requisition_error", str(exc))
+
+
+@app.exception_handler(RfqError)
+async def _rfq_error(_request: Request, exc: RfqError) -> JSONResponse:
+    return _error(422, "rfq_error", str(exc))
+
+
 @app.exception_handler(IncompleteSourceError)
 async def _incomplete_source(_request: Request, exc: IncompleteSourceError) -> JSONResponse:
     return _error(422, "incomplete_source", str(exc))
@@ -1029,8 +1054,12 @@ def post_entry(
             body=json.dumps(body),
         )
     )
+    response = JSONResponse(
+        status_code=201,
+        content=_visible_entry(session, context, body),
+    )
     session.commit()
-    return JSONResponse(status_code=201, content=_visible_entry(session, context, body))
+    return response
 
 
 @app.get(f"{BASE}/journal-entries", response_model=PageOut, tags=["ledger"])
@@ -1075,3 +1104,260 @@ def list_entries(
     payload = page.model_dump(mode="json")
     payload["items"] = [_visible_entry(session, context, item) for item in payload["items"]]
     return JSONResponse(status_code=200, content=payload)
+
+
+# --- T-2.PROC.03 / T-2.PROC.04 — requisitions, RFQs and what suppliers answered ---
+# The facts a comparison is built from, published here so the frontend repository can
+# render the matrix from the contract alone: the quoted price, the rate it was
+# converted at, and the configured procurement tax rate. The *comparison* — the
+# side-by-side view, its stated basis and its export — is T-2.PROC.04's, in the
+# frontend repository, and computes over these numbers rather than over a database.
+
+
+class RfqQuotedLineIn(BaseModel):
+    line_no: int
+    unit_price: str
+
+
+class RfqIn(BaseModel):
+    number: str
+    requisition: str
+    supplier_codes: list[str]
+    response_deadline: date
+    issued_on: date | None = None
+
+
+class RfqResponseIn(BaseModel):
+    supplier_code: str
+    received_on: date
+    lines: list[RfqQuotedLineIn]
+    currency: str | None = None
+    lead_time_days: int | None = None
+    valid_until: date | None = None
+    note: str | None = None
+
+
+class RfqLineOut(BaseModel):
+    line_no: int
+    requisition_line_no: int
+    description: str
+    quantity: str
+    uom: str
+
+
+class RfqQuotedLineOut(BaseModel):
+    line_no: int
+    unit_price: str
+    currency: str
+    # The rate the quote was converted at, so a reader can see the basis rather
+    # than having to trust that one was applied.
+    fx_rate: str
+    base_unit_price: str
+
+
+class RfqSupplierOut(BaseModel):
+    code: str
+    name: str
+    # False means the supplier was asked and did not answer — which is not the same
+    # as answering with a zero price, and this shape keeps the two apart.
+    responded: bool
+    late: bool
+    received_on: date | None = None
+    lead_time_days: int | None = None
+    valid_until: date | None = None
+    lines: list[RfqQuotedLineOut]
+
+
+class RfqBasisOut(BaseModel):
+    """What makes the quotes comparable — stated, so the matrix can label it."""
+
+    base_currency: str
+    fx_on: date
+    tax_rule_code: str | None = None
+    tax_rate_percent: str | None = None
+    tax_inclusive: bool
+
+
+class RfqOut(BaseModel):
+    number: str
+    requisition: str
+    currency: str
+    issued_on: date
+    response_deadline: date
+    status: str
+    basis: RfqBasisOut
+    lines: list[RfqLineOut]
+    suppliers: list[RfqSupplierOut]
+
+
+def _procurement_tax_rule() -> dict | None:
+    """The pack rule a procurement document carries tax at, or ``None``.
+
+    Only used to *label* the comparison's basis (T-2.PROC.04). Applying tax rules to
+    documents, and validating a supplier's tax identifiers, is T-2.PROC.08's — this
+    is one lookup so the matrix can say which rate it is inclusive of.
+
+    The market is never hard-coded: it is the pack this deployment ships. Where more
+    than one pack is installed there is no single answer, so the basis is stated
+    without a rate rather than guessed.
+    """
+    markets = installed_packs()
+    if len(markets) != 1:
+        return None
+    rules = pack_tax_rules(markets[0], "purchase_order")
+    return rules[0] if rules else None
+
+
+def _rfq_out(session: Session, context: RequestContext, rfq) -> RfqOut:
+    """One RFQ as the matrix reads it: the lines, who answered, and on what basis."""
+    base_currency = company_base_currency(session, company_id=context.company_id)
+    answered = {response.supplier_id: response for response in rfq_responses(session, rfq)}
+    rule = _procurement_tax_rule()
+    rate = rule["rate_percent"] if rule is not None else None
+
+    suppliers: list[RfqSupplierOut] = []
+    for supplier in rfq_invited(session, rfq):
+        response = answered.get(supplier.id)
+        quoted: list[RfqQuotedLineOut] = []
+        if response is not None:
+            for line in response.lines:
+                fx = rate_for(
+                    session,
+                    company_id=context.company_id,
+                    base_currency=base_currency,
+                    currency=line.response.currency,
+                    on=rfq.issued_on,
+                )
+                quoted.append(
+                    RfqQuotedLineOut(
+                        line_no=line.line_no,
+                        unit_price=_money(line.unit_price),
+                        currency=line.response.currency,
+                        fx_rate=format(fx, "f"),
+                        base_unit_price=_base_amount(line.unit_price, fx),
+                    )
+                )
+        suppliers.append(
+            RfqSupplierOut(
+                code=supplier.party.code,
+                name=supplier.party.name,
+                responded=response is not None,
+                late=bool(response.late) if response is not None else False,
+                received_on=response.received_on if response is not None else None,
+                lead_time_days=response.lead_time_days if response is not None else None,
+                valid_until=response.valid_until if response is not None else None,
+                lines=sorted(quoted, key=lambda row: row.line_no),
+            )
+        )
+
+    return RfqOut(
+        number=rfq.number,
+        requisition=rfq.requisition.number,
+        currency=rfq.currency,
+        issued_on=rfq.issued_on,
+        response_deadline=rfq.response_deadline,
+        status=rfq.status,
+        basis=RfqBasisOut(
+            base_currency=base_currency,
+            fx_on=rfq.issued_on,
+            tax_rule_code=rule["code"] if rule is not None else None,
+            tax_rate_percent=None if rate is None else str(Decimal(str(rate))),
+            tax_inclusive=rule is not None,
+        ),
+        lines=[
+            RfqLineOut(
+                line_no=line.line_no,
+                requisition_line_no=line.line_no,
+                description=line.description,
+                quantity=_money(line.quantity),
+                uom=line.uom,
+            )
+            for line in rfq.lines
+        ],
+        suppliers=suppliers,
+    )
+
+
+@app.post(f"{BASE}/rfqs", response_model=RfqOut, status_code=201, tags=["procurement"])
+def new_rfq(payload: RfqIn, context: Context) -> RfqOut:
+    """Issue an RFQ against an approved requisition to one or more suppliers."""
+    session = context.session
+    require(
+        session,
+        company_id=context.company_id,
+        subject=context.actor,
+        capability="rfq.post",
+        entity="rfq",
+    )
+    requisition = requisition_by_number(
+        session, company_id=context.company_id, number=payload.requisition
+    )
+    rfq = issue_rfq(
+        session,
+        requisition=requisition,
+        number=payload.number,
+        supplier_codes=payload.supplier_codes,
+        response_deadline=payload.response_deadline,
+        issued_on=payload.issued_on,
+    )
+    response = _rfq_out(session, context, rfq)
+    session.commit()
+    return response
+
+
+@app.post(
+    f"{BASE}/rfqs/{{number}}/responses",
+    response_model=RfqOut,
+    status_code=201,
+    tags=["procurement"],
+)
+def record_rfq_answer(number: str, payload: RfqResponseIn, context: Context) -> RfqOut:
+    """Record one invited supplier's answer, line by line.
+
+    A late answer is stored with `late = true` rather than refused: deciding whether
+    to still use it is the buyer's, and the record has to be able to say so.
+    """
+    session = context.session
+    require(
+        session,
+        company_id=context.company_id,
+        subject=context.actor,
+        capability="rfq.post",
+        entity="rfq",
+    )
+    rfq = rfq_by_number(session, company_id=context.company_id, number=number)
+    record_rfq_response(
+        session,
+        rfq,
+        supplier_code=payload.supplier_code,
+        received_on=payload.received_on,
+        lines=[{"line_no": line.line_no, "unit_price": _amount(line.unit_price)}
+               for line in payload.lines],
+        currency=payload.currency,
+        lead_time_days=payload.lead_time_days,
+        valid_until=payload.valid_until,
+        note=payload.note,
+    )
+    response = _rfq_out(session, context, rfq)
+    session.commit()
+    return response
+
+
+@app.get(f"{BASE}/rfqs/{{number}}", response_model=RfqOut, tags=["procurement"])
+def read_rfq(number: str, context: Context) -> RfqOut:
+    """One RFQ with its lines, its invitees and what each of them answered.
+
+    What T-2.PROC.04's comparative statement matrix reads. A quote in another
+    currency is carried at the rate for the RFQ's issue date, and the rate is in the
+    payload, so the basis is visible rather than implied.
+    """
+    session = context.session
+    require(
+        session,
+        company_id=context.company_id,
+        subject=context.actor,
+        capability="rfq.read",
+        entity="rfq",
+    )
+    rfq = rfq_by_number(session, company_id=context.company_id, number=number)
+    return _rfq_out(session, context, rfq)

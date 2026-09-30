@@ -1300,8 +1300,9 @@ def new_rfq(payload: RfqIn, context: Context) -> RfqOut:
         response_deadline=payload.response_deadline,
         issued_on=payload.issued_on,
     )
+    response = _rfq_out(session, context, rfq)
     session.commit()
-    return _rfq_out(session, context, rfq)
+    return response
 
 
 @app.post(
@@ -1337,8 +1338,9 @@ def record_rfq_answer(number: str, payload: RfqResponseIn, context: Context) -> 
         valid_until=payload.valid_until,
         note=payload.note,
     )
+    response = _rfq_out(session, context, rfq)
     session.commit()
-    return _rfq_out(session, context, rfq)
+    return response
 
 
 @app.get(f"{BASE}/rfqs/{{number}}", response_model=RfqOut, tags=["procurement"])

@@ -49,7 +49,7 @@ from typing import Annotated, Any
 from fastapi import Depends, FastAPI, Header, Query, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy import (
     DateTime,
     ForeignKey,
@@ -1896,6 +1896,9 @@ class QuotationIn(BaseModel):
 
     Lines come with the header because a quotation with no lines is not a document —
     and because a partially-created quotation would be a quotation nobody quoted.
+    There is no endpoint that adds a line to an existing one, so an empty list would
+    create a document that can never become an order; the boundary refuses it here
+    rather than letting the store hold it.
     """
 
     number: str
@@ -1903,7 +1906,7 @@ class QuotationIn(BaseModel):
     currency: str | None = None
     issued_on: date | None = None
     valid_until: date | None = None
-    lines: list[QuotationLineIn]
+    lines: Annotated[list[QuotationLineIn], Field(min_length=1)]
 
 
 class QuotationPriceIn(BaseModel):

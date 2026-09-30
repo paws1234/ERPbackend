@@ -7,11 +7,14 @@ Green on all six:
 
 1. **a quotation prices its lines when it is written**, recording the price, the day it
    was fixed (`priced_on`) and the rule that produced it — a price a person stated
-   records no rule, which is an honest null rather than an invented code
+   records no rule, which is an honest null rather than an invented code; a document may
+   only name a **registered** currency (T-1.ACCT.05), and a line number is used once
 2. **re-pricing restates every line**, with the window the new prices hold for: a
    partial re-price is refused, a re-price naming a line that is not there is refused,
    and a window that has already closed is refused — the plan names no quotation
-   validity, so no default is invented, and a quotation with no window never expires
+   validity, so no default is invented, and a quotation with no window never expires.
+   A re-price restates the **rule** with the price, so a line can never keep the rule
+   that produced a price it no longer has
 3. **an expired quotation cannot be converted**: the refusal names re-pricing as the
    fix, the card is not ordered, and after a re-price the same conversion succeeds
 4. **conversion produces an order whose lines are identical** to the quotation's, linked
@@ -21,7 +24,8 @@ Green on all six:
    can neither be re-priced nor have a line added, because it is no longer an offer
 6. **the whole path is drivable through the published API**, refusals included:
    `POST /api/v1/quotations`, `GET /api/v1/quotations/{number}`,
-   `POST .../reprice` and `POST .../order`
+   `POST .../reprice` and `POST .../order` — and a quotation with **no lines** is
+   refused at the boundary, because nothing could ever convert it
 
 **Scratch database only**: it drops and recreates the public schema.
 """
@@ -44,6 +48,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from app.api import BASE, app  # noqa: E402
 from app.company import Company  # noqa: E402
 from app.db import Base  # noqa: E402
+from app.ledger.currency import UnknownCurrencyError  # noqa: E402
 from app.sales.customers import create_customer  # noqa: E402
 from app.sales.orders import (  # noqa: E402
     DuplicateOrderError,
@@ -196,10 +201,23 @@ def main() -> int:
             InvalidQuotationError,
         )
         session.rollback()
+        # a document may only name a currency this company has registered (T-1.ACCT.05)
+        said += " | " + _refused(
+            lambda: create_quotation(
+                session,
+                company_id=COMPANY,
+                customer_id=acme.id,
+                number="Q-XXX",
+                currency="XXX",
+            ),
+            UnknownCurrencyError,
+        )
+        session.rollback()
         print(
             f"1. two lines priced at {first.unit_price!r} (rule {first.rule_code!r}) and"
             f" {second.unit_price!r} (no rule, stated by hand), fixed on {first.priced_on};"
-            f" a reused line number and a negative quantity are refused: {said}"
+            f" a reused line number, a negative quantity and an unregistered currency"
+            f" are refused: {said}"
         )
 
         # 2 — re-pricing restates every line, with a window that has not closed
@@ -259,6 +277,20 @@ def main() -> int:
         assert priced[0].rule_code == "TIER-B", "the re-price kept the rule behind the old price"
         assert quote.valid_until == date(2026, 12, 31)
         assert not expired(quote, on=date(2026, 10, 2))
+        # ... and a re-price that names **no** rule clears the one it had: a price can
+        # never keep the rule that produced a different price
+        reprice_quotation(
+            session,
+            quote,
+            prices={1: Decimal("7.00"), 2: Decimal("270.00")},
+            valid_until=date(2027, 1, 31),
+            on=date(2026, 10, 3),
+        )
+        session.commit()
+        assert all(line.rule_code is None for line in lines_of(session, quote)), (
+            "a re-price that named no rule left a stale one behind"
+        )
+        assert all(line.priced_on == date(2026, 10, 3) for line in lines_of(session, quote))
         # a quotation with no window never expires — nothing is invented to close it
         open_ended = create_quotation(
             session, company_id=COMPANY, customer_id=acme.id, number="Q-OPEN"
@@ -501,10 +533,22 @@ def main() -> int:
     forbidden = client.post(
         f"{BASE}/quotations",
         headers={**headers, "X-Actor": "stranger"},
-        json={"number": "Q-NOPE", "customer_code": "ACME", "lines": []},
+        json={
+            "number": "Q-NOPE",
+            "customer_code": "ACME",
+            "lines": [{"line_no": 1, "description": "x", "quantity": "1", "unit_price": "1"}],
+        },
     )
     assert forbidden.status_code == 403, forbidden.text
     assert _shape_error(forbidden)["code"] == "forbidden"
+    # a quotation with no lines is refused at the boundary: nothing could ever convert it
+    empty = client.post(
+        f"{BASE}/quotations",
+        headers=headers,
+        json={"number": "Q-EMPTY", "customer_code": "ACME", "lines": []},
+    )
+    assert empty.status_code == 422, empty.text
+    assert _shape_error(empty)["code"] == "invalid_request", empty.text
     print(
         f"6. the API priced Q-API (total {body['total']}), refused a partial re-price"
         f" ({refused[:40]}\u2026), converted it to SO-API once ({twice[:40]}\u2026),"

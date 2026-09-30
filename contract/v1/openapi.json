@@ -1164,7 +1164,7 @@
         "type": "object"
       },
       "QuotationIn": {
-        "description": "A quotation and everything on it, in one request.\n\nLines come with the header because a quotation with no lines is not a document \u2014\nand because a partially-created quotation would be a quotation nobody quoted.",
+        "description": "A quotation and everything on it, in one request.\n\nLines come with the header because a quotation with no lines is not a document \u2014\nand because a partially-created quotation would be a quotation nobody quoted.\nThere is no endpoint that adds a line to an existing one, so an empty list would\ncreate a document that can never become an order; the boundary refuses it here\nrather than letting the store hold it.",
         "properties": {
           "currency": {
             "anyOf": [
@@ -1197,6 +1197,7 @@
             "items": {
               "$ref": "#/components/schemas/QuotationLineIn"
             },
+            "minItems": 1,
             "title": "Lines",
             "type": "array"
           },

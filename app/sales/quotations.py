@@ -59,6 +59,7 @@ from sqlalchemy import (
 from sqlalchemy.orm import Mapped, Session, mapped_column, relationship
 
 from app.db import Base
+from app.ledger.currency import currency_by_code
 from app.sales.customers import Customer
 
 # Exact decimals, like every amount in the platform (DOMAIN-MODELS.md §2).
@@ -271,6 +272,14 @@ def create_quotation(
         raise DuplicateQuotationError(
             f"quotation {wanted!r} already exists in this company"
         )
+    if currency is not None:
+        # A document may only name a currency this company has **registered**
+        # (T-1.ACCT.05) — the rule the customer master already applies, for the same
+        # reason: an unregistered code is a currency nobody can convert, price or pay.
+        # The refusal is `UnknownCurrencyError`, which the boundary already answers.
+        currency = currency_by_code(
+            session, company_id=company_id, code=str(currency)
+        ).code
     quotation = Quotation(
         company_id=company_id,
         customer_id=customer_id,
@@ -444,8 +453,12 @@ def reprice_quotation(
             )
         line.unit_price = price
         line.priced_on = today
-        if rules is not None and line.line_no in rules:
-            line.rule_code = None if rules[line.line_no] is None else str(rules[line.line_no])
+        # The rule is restated with the price, **always**: a line whose price changes
+        # while it keeps the rule that produced the *old* one is a line that lies about
+        # why it costs what it costs. No rule named means the price is caller-stated,
+        # which is the same honest null `add_line` records.
+        stated_rule = None if rules is None else rules.get(line.line_no)
+        line.rule_code = None if stated_rule is None else str(stated_rule)
     if valid_until <= today:
         raise InvalidQuotationError(
             f"a re-priced quotation needs a window that has not closed; {valid_until} is"

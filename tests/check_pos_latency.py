@@ -33,6 +33,7 @@ is fixed so two runs on the same machine are comparable.
 
 from __future__ import annotations
 
+import math
 import os
 import statistics
 import sys
@@ -82,10 +83,14 @@ LINES_PER_SALE = 3
 
 
 def _percentile(values: list[float], fraction: float) -> float:
-    """The value at `fraction` of a sorted sample, by the nearest-rank method."""
+    """The value at `fraction` of a sorted sample, by the nearest-rank method.
+
+    The rank is `ceil(fraction * n)` — the smallest sample that covers the fraction —
+    clamped to the ends, so the 95th of 60 samples is the 57th, not the 58th.
+    """
     ordered = sorted(values)
-    rank = max(1, int(round(fraction * len(ordered) + 0.5)))
-    return ordered[min(rank, len(ordered)) - 1]
+    rank = max(1, min(len(ordered), math.ceil(fraction * len(ordered))))
+    return ordered[rank - 1]
 
 
 def _report(label: str, milliseconds: list[float]) -> dict:

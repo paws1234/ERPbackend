@@ -196,6 +196,7 @@ from app.ar.recurring import RecurringError
 from app.sales.tax import TaxError
 from app.pos.drawer import DrawerError
 from app.pos.drawer import record_movement
+from app.pos.reports import ReportError, day_report, shift_report, void_sale
 from app.pos.sales import (
     PosError,
     complete_sale,
@@ -805,6 +806,11 @@ async def _drawer_error(_request: Request, exc: DrawerError) -> JSONResponse:
 @app.exception_handler(ShiftError)
 async def _shift_error(_request: Request, exc: ShiftError) -> JSONResponse:
     return _error(422, "shift_error", str(exc))
+
+
+@app.exception_handler(ReportError)
+async def _report_error(_request: Request, exc: ReportError) -> JSONResponse:
+    return _error(422, "report_error", str(exc))
 
 
 @app.exception_handler(InvoiceError)
@@ -3156,6 +3162,10 @@ class DrawerMovementOut(BaseModel):
     actor: str
 
 
+class PosReportOut(BaseModel):
+    report: dict
+
+
 class CashDrawerPolicyIn(BaseModel):
     """Whether this company's tills must trade inside an open shift (null = not stated)."""
 
@@ -3433,3 +3443,39 @@ def _pos_shift(session: Session, context: RequestContext, shift_id: str):
     return shift
 
 
+@app.get(f"{BASE}/pos/z-reports/shift/{{shift_id}}", response_model=PosReportOut, tags=["pos"])
+def pos_shift_report(shift_id: str, context: Context) -> PosReportOut:
+    """The shift's Z-Report: sales, tax, tenders, voids, refunds and the drawer."""
+    session = context.session
+    require(session, company_id=context.company_id, subject=context.actor,
+            capability="pos.read", entity="pos_report", entity_id=shift_id)
+    shift = _pos_shift(session, context, shift_id)
+    return PosReportOut(report=_jsonable(shift_report(session, shift)))
+
+
+@app.get(f"{BASE}/pos/z-reports/day", response_model=PosReportOut, tags=["pos"])
+def pos_day_report(on: date, context: Context) -> PosReportOut:
+    """The day's Z-Report: every shift of that day, added exactly."""
+    session = context.session
+    require(session, company_id=context.company_id, subject=context.actor,
+            capability="pos.read", entity="pos_report")
+    return PosReportOut(
+        report=_jsonable(day_report(session, company_id=context.company_id, on=on))
+    )
+
+
+def _jsonable(value: Any) -> Any:
+    """A report as JSON: decimals as their exact string form, uuids as strings.
+
+    The platform's money rule (DOMAIN-MODELS §2) holds at the boundary too: an amount
+    crosses as a decimal *string*, never as a float.
+    """
+    if isinstance(value, dict):
+        return {str(key): _jsonable(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_jsonable(item) for item in value]
+    if isinstance(value, Decimal):
+        return format(value, "f")
+    if isinstance(value, (uuid.UUID, date, datetime)):
+        return str(value)
+    return value

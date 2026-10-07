@@ -206,6 +206,17 @@
             "title": "Code",
             "type": "string"
           },
+          "credit_check_mode": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Credit Check Mode"
+          },
           "fiscal_year_start_month": {
             "title": "Fiscal Year Start Month",
             "type": "integer"
@@ -227,6 +238,330 @@
           "fiscal_year_start_month"
         ],
         "title": "CompanyOut",
+        "type": "object"
+      },
+      "ConfirmOrderIn": {
+        "description": "What confirming an order needs: the customer's exposure, and any acceptance.\n\nThe **exposure is stated by the caller** until T-3.AR.06 computes it across open\nAR \u2014 the path this task's own recorded stop chose. `acknowledge_breach` is the\nacknowledgement `warn` mode requires: an explicit act, so a breach is never\naccepted by the mere act of asking.",
+        "properties": {
+          "acknowledge_breach": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Acknowledge Breach"
+          },
+          "exposure": {
+            "title": "Exposure",
+            "type": "string"
+          }
+        },
+        "required": [
+          "exposure"
+        ],
+        "title": "ConfirmOrderIn",
+        "type": "object"
+      },
+      "CouponIn": {
+        "description": "A coupon as it is filed: its campaign, its discount and its own limits.\n\nEvery limit is stated here rather than defaulted, because the plan states none of\nthem: an omitted window is *always open* and an omitted usage limit is *no limit*,\nwhich are different answers from \"closed today\" and \"unusable\".",
+        "properties": {
+          "campaign": {
+            "title": "Campaign",
+            "type": "string"
+          },
+          "code": {
+            "title": "Code",
+            "type": "string"
+          },
+          "discount_type": {
+            "title": "Discount Type",
+            "type": "string"
+          },
+          "discount_value": {
+            "title": "Discount Value",
+            "type": "string"
+          },
+          "max_redemptions": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Redemptions"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "stacking_allowance": {
+            "title": "Stacking Allowance",
+            "type": "integer"
+          },
+          "valid_from": {
+            "anyOf": [
+              {
+                "format": "date",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Valid From"
+          },
+          "valid_until": {
+            "anyOf": [
+              {
+                "format": "date",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Valid Until"
+          }
+        },
+        "required": [
+          "code",
+          "name",
+          "campaign",
+          "discount_type",
+          "discount_value",
+          "stacking_allowance"
+        ],
+        "title": "CouponIn",
+        "type": "object"
+      },
+      "CouponOut": {
+        "properties": {
+          "campaign": {
+            "title": "Campaign",
+            "type": "string"
+          },
+          "code": {
+            "title": "Code",
+            "type": "string"
+          },
+          "discount_type": {
+            "title": "Discount Type",
+            "type": "string"
+          },
+          "discount_value": {
+            "title": "Discount Value",
+            "type": "string"
+          },
+          "max_redemptions": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Redemptions"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "stacking_allowance": {
+            "title": "Stacking Allowance",
+            "type": "integer"
+          },
+          "valid_from": {
+            "anyOf": [
+              {
+                "format": "date",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Valid From"
+          },
+          "valid_until": {
+            "anyOf": [
+              {
+                "format": "date",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Valid Until"
+          }
+        },
+        "required": [
+          "code",
+          "name",
+          "campaign",
+          "discount_type",
+          "discount_value",
+          "stacking_allowance"
+        ],
+        "title": "CouponOut",
+        "type": "object"
+      },
+      "CouponRedeemIn": {
+        "description": "Which document is using the coupon, and what the price is before it applies.",
+        "properties": {
+          "base_price": {
+            "title": "Base Price",
+            "type": "string"
+          },
+          "document_id": {
+            "title": "Document Id",
+            "type": "string"
+          },
+          "document_type": {
+            "title": "Document Type",
+            "type": "string"
+          },
+          "on": {
+            "anyOf": [
+              {
+                "format": "date",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "On"
+          }
+        },
+        "required": [
+          "document_type",
+          "document_id",
+          "base_price"
+        ],
+        "title": "CouponRedeemIn",
+        "type": "object"
+      },
+      "CouponRedemptionOut": {
+        "properties": {
+          "campaign": {
+            "title": "Campaign",
+            "type": "string"
+          },
+          "code": {
+            "title": "Code",
+            "type": "string"
+          },
+          "discount_amount": {
+            "title": "Discount Amount",
+            "type": "string"
+          },
+          "document_id": {
+            "title": "Document Id",
+            "type": "string"
+          },
+          "document_type": {
+            "title": "Document Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "campaign",
+          "document_type",
+          "document_id",
+          "discount_amount"
+        ],
+        "title": "CouponRedemptionOut",
+        "type": "object"
+      },
+      "CreditCheckModeIn": {
+        "description": "The policy a company is stating, or null to withdraw it (back to unstated).",
+        "properties": {
+          "mode": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mode"
+          }
+        },
+        "required": [
+          "mode"
+        ],
+        "title": "CreditCheckModeIn",
+        "type": "object"
+      },
+      "CreditDecisionOut": {
+        "description": "The order-time credit decision as it was recorded (T-3.SALES.04).\n\nEvery field is the value *at the moment of confirmation* \u2014 the mode then, the limit\nthen, the exposure then \u2014 which is why a later change to any of them leaves this\nanswer untouched.",
+        "properties": {
+          "acknowledged_by": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Acknowledged By"
+          },
+          "breached": {
+            "title": "Breached",
+            "type": "boolean"
+          },
+          "decided_at": {
+            "format": "date-time",
+            "title": "Decided At",
+            "type": "string"
+          },
+          "exposure": {
+            "title": "Exposure",
+            "type": "string"
+          },
+          "exposure_after": {
+            "title": "Exposure After",
+            "type": "string"
+          },
+          "limit": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Limit"
+          },
+          "mode": {
+            "title": "Mode",
+            "type": "string"
+          },
+          "order_value": {
+            "title": "Order Value",
+            "type": "string"
+          }
+        },
+        "required": [
+          "mode",
+          "exposure",
+          "order_value",
+          "exposure_after",
+          "breached",
+          "decided_at"
+        ],
+        "title": "CreditDecisionOut",
         "type": "object"
       },
       "CurrencyIn": {
@@ -765,6 +1100,10 @@
             "title": "Quantity",
             "type": "string"
           },
+          "remaining": {
+            "title": "Remaining",
+            "type": "string"
+          },
           "rule_code": {
             "anyOf": [
               {
@@ -775,6 +1114,21 @@
               }
             ],
             "title": "Rule Code"
+          },
+          "rule_priority": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rule Priority"
+          },
+          "shipped": {
+            "title": "Shipped",
+            "type": "string"
           },
           "unit_price": {
             "title": "Unit Price",
@@ -792,7 +1146,9 @@
           "uom",
           "unit_price",
           "priced_on",
-          "amount"
+          "amount",
+          "shipped",
+          "remaining"
         ],
         "title": "OrderLineOut",
         "type": "object"
@@ -800,6 +1156,39 @@
       "OrderOut": {
         "description": "The order a quotation became, and the quotation it came from.",
         "properties": {
+          "confirmed_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Confirmed At"
+          },
+          "confirmed_by": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Confirmed By"
+          },
+          "credit_decision": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CreditDecisionOut"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "currency": {
             "anyOf": [
               {
@@ -831,6 +1220,16 @@
             "title": "Ordered On",
             "type": "string"
           },
+          "pick_list": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PickListOut"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "quotation": {
             "anyOf": [
               {
@@ -842,6 +1241,17 @@
             ],
             "title": "Quotation"
           },
+          "shipments": {
+            "items": {
+              "$ref": "#/components/schemas/ShipmentOut"
+            },
+            "title": "Shipments",
+            "type": "array"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
           "total": {
             "title": "Total",
             "type": "string"
@@ -852,7 +1262,9 @@
           "customer_code",
           "ordered_on",
           "lines",
-          "total"
+          "total",
+          "status",
+          "shipments"
         ],
         "title": "OrderOut",
         "type": "object"
@@ -886,6 +1298,112 @@
           "total"
         ],
         "title": "PageOut",
+        "type": "object"
+      },
+      "PickListIn": {
+        "properties": {
+          "number": {
+            "title": "Number",
+            "type": "string"
+          },
+          "on": {
+            "anyOf": [
+              {
+                "format": "date",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "On"
+          }
+        },
+        "required": [
+          "number"
+        ],
+        "title": "PickListIn",
+        "type": "object"
+      },
+      "PickListLineOut": {
+        "description": "One line of the picker's paper: what the order asks, and what was picked.",
+        "properties": {
+          "item_sku": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Item Sku"
+          },
+          "line_no": {
+            "title": "Line No",
+            "type": "integer"
+          },
+          "picked_quantity": {
+            "title": "Picked Quantity",
+            "type": "string"
+          },
+          "quantity": {
+            "title": "Quantity",
+            "type": "string"
+          },
+          "uom": {
+            "title": "Uom",
+            "type": "string"
+          }
+        },
+        "required": [
+          "line_no",
+          "quantity",
+          "uom",
+          "picked_quantity"
+        ],
+        "title": "PickListLineOut",
+        "type": "object"
+      },
+      "PickListOut": {
+        "properties": {
+          "created_on": {
+            "format": "date",
+            "title": "Created On",
+            "type": "string"
+          },
+          "lines": {
+            "items": {
+              "$ref": "#/components/schemas/PickListLineOut"
+            },
+            "title": "Lines",
+            "type": "array"
+          },
+          "number": {
+            "title": "Number",
+            "type": "string"
+          }
+        },
+        "required": [
+          "number",
+          "created_on",
+          "lines"
+        ],
+        "title": "PickListOut",
+        "type": "object"
+      },
+      "PickedQuantityIn": {
+        "description": "How much of one pick-list line was picked.",
+        "properties": {
+          "quantity": {
+            "title": "Quantity",
+            "type": "string"
+          }
+        },
+        "required": [
+          "quantity"
+        ],
+        "title": "PickedQuantityIn",
         "type": "object"
       },
       "PipelineCardOut": {
@@ -1137,6 +1655,268 @@
         "title": "PipelineStageOut",
         "type": "object"
       },
+      "PriceDecisionOut": {
+        "description": "The engine's answer, with the whole ordering it decided in.",
+        "properties": {
+          "base_price": {
+            "title": "Base Price",
+            "type": "string"
+          },
+          "considered": {
+            "items": {
+              "$ref": "#/components/schemas/PriceRuleOut"
+            },
+            "title": "Considered",
+            "type": "array"
+          },
+          "price": {
+            "title": "Price",
+            "type": "string"
+          },
+          "rule_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rule Code"
+          },
+          "rule_priority": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rule Priority"
+          }
+        },
+        "required": [
+          "base_price",
+          "price",
+          "considered"
+        ],
+        "title": "PriceDecisionOut",
+        "type": "object"
+      },
+      "PriceQueryIn": {
+        "description": "What to price, before any rule has been applied to it.\n\n`base_price` is stated by the caller because the plan names no price list and the\nitem master holds none: the engine decides which rule applies and what it does, not\nwhat the goods list at.",
+        "properties": {
+          "base_price": {
+            "title": "Base Price",
+            "type": "string"
+          },
+          "customer_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Customer Code"
+          },
+          "item_sku": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Item Sku"
+          },
+          "quantity": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Quantity"
+          },
+          "tier": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tier"
+          }
+        },
+        "required": [
+          "base_price"
+        ],
+        "title": "PriceQueryIn",
+        "type": "object"
+      },
+      "PriceRuleIn": {
+        "description": "One rule as it is filed: its scope, and the discount it applies.\n\nEvery dimension is optional and an omitted one means **no constraint** \u2014 an absent\ntier is any tier \u2014 while `discount_type` must be stated, because the ledger records\nno default and a rule with an invented one would silently discount by the wrong\nmeasure.",
+        "properties": {
+          "code": {
+            "title": "Code",
+            "type": "string"
+          },
+          "discount_type": {
+            "title": "Discount Type",
+            "type": "string"
+          },
+          "discount_value": {
+            "title": "Discount Value",
+            "type": "string"
+          },
+          "item_sku": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Item Sku"
+          },
+          "max_quantity": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Quantity"
+          },
+          "min_quantity": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Min Quantity"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "priority": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Priority"
+          },
+          "tier": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tier"
+          }
+        },
+        "required": [
+          "code",
+          "name",
+          "discount_type",
+          "discount_value"
+        ],
+        "title": "PriceRuleIn",
+        "type": "object"
+      },
+      "PriceRuleOut": {
+        "properties": {
+          "code": {
+            "title": "Code",
+            "type": "string"
+          },
+          "discount_type": {
+            "title": "Discount Type",
+            "type": "string"
+          },
+          "discount_value": {
+            "title": "Discount Value",
+            "type": "string"
+          },
+          "item_sku": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Item Sku"
+          },
+          "max_quantity": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Quantity"
+          },
+          "min_quantity": {
+            "title": "Min Quantity",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "priority": {
+            "title": "Priority",
+            "type": "integer"
+          },
+          "tier": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tier"
+          }
+        },
+        "required": [
+          "code",
+          "name",
+          "min_quantity",
+          "priority",
+          "discount_type",
+          "discount_value"
+        ],
+        "title": "PriceRuleOut",
+        "type": "object"
+      },
       "QuotationForOpportunityIn": {
         "description": "The number the quotation is filed under, and the day it is issued.",
         "properties": {
@@ -1323,6 +2103,17 @@
               }
             ],
             "title": "Rule Code"
+          },
+          "rule_priority": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rule Priority"
           },
           "unit_price": {
             "title": "Unit Price",
@@ -1984,6 +2775,131 @@
           "lines"
         ],
         "title": "RfqSupplierOut",
+        "type": "object"
+      },
+      "ShipmentIn": {
+        "description": "What a shipment needs: where from, and how much of which lines.\n\nThe lines come with the header because a shipment with nothing on it moves no\nstock \u2014 the boundary refuses an empty list rather than storing a document that\ndescribes nothing.",
+        "properties": {
+          "lines": {
+            "items": {
+              "$ref": "#/components/schemas/ShipmentLineIn"
+            },
+            "minItems": 1,
+            "title": "Lines",
+            "type": "array"
+          },
+          "number": {
+            "title": "Number",
+            "type": "string"
+          },
+          "on": {
+            "anyOf": [
+              {
+                "format": "date",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "On"
+          },
+          "warehouse": {
+            "title": "Warehouse",
+            "type": "string"
+          }
+        },
+        "required": [
+          "number",
+          "warehouse",
+          "lines"
+        ],
+        "title": "ShipmentIn",
+        "type": "object"
+      },
+      "ShipmentLineIn": {
+        "properties": {
+          "line_no": {
+            "title": "Line No",
+            "type": "integer"
+          },
+          "quantity": {
+            "title": "Quantity",
+            "type": "string"
+          }
+        },
+        "required": [
+          "line_no",
+          "quantity"
+        ],
+        "title": "ShipmentLineIn",
+        "type": "object"
+      },
+      "ShipmentLineOut": {
+        "description": "One line as it left, and the stock movement that carried it out.",
+        "properties": {
+          "line_no": {
+            "title": "Line No",
+            "type": "integer"
+          },
+          "movement": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Movement"
+          },
+          "quantity": {
+            "title": "Quantity",
+            "type": "string"
+          },
+          "uom": {
+            "title": "Uom",
+            "type": "string"
+          }
+        },
+        "required": [
+          "line_no",
+          "quantity",
+          "uom"
+        ],
+        "title": "ShipmentLineOut",
+        "type": "object"
+      },
+      "ShipmentOut": {
+        "properties": {
+          "lines": {
+            "items": {
+              "$ref": "#/components/schemas/ShipmentLineOut"
+            },
+            "title": "Lines",
+            "type": "array"
+          },
+          "number": {
+            "title": "Number",
+            "type": "string"
+          },
+          "shipped_on": {
+            "format": "date",
+            "title": "Shipped On",
+            "type": "string"
+          },
+          "warehouse": {
+            "title": "Warehouse",
+            "type": "string"
+          }
+        },
+        "required": [
+          "number",
+          "warehouse",
+          "shipped_on",
+          "lines"
+        ],
+        "title": "ShipmentOut",
         "type": "object"
       }
     }
@@ -2717,6 +3633,384 @@
         "summary": "Current Company",
         "tags": [
           "platform"
+        ]
+      }
+    },
+    "/api/v1/companies/current/credit-check-mode": {
+      "post": {
+        "description": "State, change or withdraw this company's credit-check policy.\n\nPlan \u00a78 leaves the mode undecided, so the body carries a value or an explicit null\nrather than relying on a default: \"not stated\" is a state a company may be in, and\nthe order-time check treats it as a refusal rather than as `off`.\n\nChanging the mode is forward-looking only \u2014 decisions already recorded keep the mode\nthey were taken under, because each one stored it.",
+        "operationId": "set_company_credit_check_mode_api_v1_companies_current_credit_check_mode_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "x-company-id",
+            "required": true,
+            "schema": {
+              "title": "X-Company-Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-actor",
+            "required": false,
+            "schema": {
+              "default": "unknown",
+              "title": "X-Actor",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreditCheckModeIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CompanyOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The request could not be understood"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The caller is not identified"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The caller may not do this"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The company, document or route does not exist"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The request clashes with one already made"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The request did not match the contract, or a domain rule refused it"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The platform failed unexpectedly"
+          }
+        },
+        "summary": "Set Company Credit Check Mode",
+        "tags": [
+          "platform"
+        ]
+      }
+    },
+    "/api/v1/coupons": {
+      "post": {
+        "description": "File one coupon.",
+        "operationId": "create_coupon_api_v1_coupons_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "x-company-id",
+            "required": true,
+            "schema": {
+              "title": "X-Company-Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-actor",
+            "required": false,
+            "schema": {
+              "default": "unknown",
+              "title": "X-Actor",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CouponIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CouponOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The request could not be understood"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The caller is not identified"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The caller may not do this"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The company, document or route does not exist"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The request clashes with one already made"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The request did not match the contract, or a domain rule refused it"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The platform failed unexpectedly"
+          }
+        },
+        "summary": "Create Coupon",
+        "tags": [
+          "sales"
+        ]
+      }
+    },
+    "/api/v1/coupons/{code}/redeem": {
+      "post": {
+        "description": "Use a coupon on a document, recording the use against that document.\n\nThe refusals are the point: an unknown code, one outside its window, one used to\nits limit and one stacked past the allowance each answer with the reason, and none\nof them writes a redemption.",
+        "operationId": "redeem_api_v1_coupons__code__redeem_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "code",
+            "required": true,
+            "schema": {
+              "title": "Code",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-company-id",
+            "required": true,
+            "schema": {
+              "title": "X-Company-Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-actor",
+            "required": false,
+            "schema": {
+              "default": "unknown",
+              "title": "X-Actor",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CouponRedeemIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CouponRedemptionOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The request could not be understood"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The caller is not identified"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The caller may not do this"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The company, document or route does not exist"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The request clashes with one already made"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The request did not match the contract, or a domain rule refused it"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The platform failed unexpectedly"
+          }
+        },
+        "summary": "Redeem",
+        "tags": [
+          "sales"
         ]
       }
     },
@@ -4363,6 +5657,252 @@
         ]
       }
     },
+    "/api/v1/price-rules": {
+      "post": {
+        "description": "File one pricing rule.",
+        "operationId": "create_price_rule_api_v1_price_rules_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "x-company-id",
+            "required": true,
+            "schema": {
+              "title": "X-Company-Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-actor",
+            "required": false,
+            "schema": {
+              "default": "unknown",
+              "title": "X-Actor",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PriceRuleIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PriceRuleOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The request could not be understood"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The caller is not identified"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The caller may not do this"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The company, document or route does not exist"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The request clashes with one already made"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The request did not match the contract, or a domain rule refused it"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The platform failed unexpectedly"
+          }
+        },
+        "summary": "Create Price Rule",
+        "tags": [
+          "sales"
+        ]
+      }
+    },
+    "/api/v1/price-rules/resolve": {
+      "post": {
+        "description": "What the engine makes of one prospective line, and the order it decided in.\n\nThe tier comes from the customer when one is named, so a caller cannot price a\ncustomer's order under a tier that customer does not sit in.",
+        "operationId": "resolve_price_rule_api_v1_price_rules_resolve_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "x-company-id",
+            "required": true,
+            "schema": {
+              "title": "X-Company-Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-actor",
+            "required": false,
+            "schema": {
+              "default": "unknown",
+              "title": "X-Actor",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PriceQueryIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PriceDecisionOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The request could not be understood"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The caller is not identified"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The caller may not do this"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The company, document or route does not exist"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The request clashes with one already made"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The request did not match the contract, or a domain rule refused it"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The platform failed unexpectedly"
+          }
+        },
+        "summary": "Resolve Price Rule",
+        "tags": [
+          "sales"
+        ]
+      }
+    },
     "/api/v1/quotations": {
       "post": {
         "description": "Raise a quotation with its priced lines and its validity window.",
@@ -5491,6 +7031,665 @@
         "summary": "Record Rfq Answer",
         "tags": [
           "procurement"
+        ]
+      }
+    },
+    "/api/v1/sales-orders/{number}": {
+      "get": {
+        "description": "One order with its lifecycle and the credit decision taken at confirmation.",
+        "operationId": "sales_order_api_v1_sales_orders__number__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "number",
+            "required": true,
+            "schema": {
+              "title": "Number",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-company-id",
+            "required": true,
+            "schema": {
+              "title": "X-Company-Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-actor",
+            "required": false,
+            "schema": {
+              "default": "unknown",
+              "title": "X-Actor",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OrderOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The request could not be understood"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The caller is not identified"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The caller may not do this"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The company, document or route does not exist"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The request clashes with one already made"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The request did not match the contract, or a domain rule refused it"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The platform failed unexpectedly"
+          }
+        },
+        "summary": "Sales Order",
+        "tags": [
+          "sales"
+        ]
+      }
+    },
+    "/api/v1/sales-orders/{number}/confirm": {
+      "post": {
+        "description": "Confirm an order, applying the company's credit-check mode as it is placed.\n\nThe exposure is **stated by the caller** until T-3.AR.06 computes it across open\nAR. The refusal a `block` breach produces is the point of the endpoint: it is the\none place an order stops being an intention.",
+        "operationId": "confirm_sales_order_api_v1_sales_orders__number__confirm_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "number",
+            "required": true,
+            "schema": {
+              "title": "Number",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-company-id",
+            "required": true,
+            "schema": {
+              "title": "X-Company-Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-actor",
+            "required": false,
+            "schema": {
+              "default": "unknown",
+              "title": "X-Actor",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ConfirmOrderIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OrderOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The request could not be understood"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The caller is not identified"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The caller may not do this"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The company, document or route does not exist"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The request clashes with one already made"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The request did not match the contract, or a domain rule refused it"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The platform failed unexpectedly"
+          }
+        },
+        "summary": "Confirm Sales Order",
+        "tags": [
+          "sales"
+        ]
+      }
+    },
+    "/api/v1/sales-orders/{number}/pick-list": {
+      "post": {
+        "description": "Draw the pick list for a confirmed order \u2014 exactly its lines, once.",
+        "operationId": "create_order_pick_list_api_v1_sales_orders__number__pick_list_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "number",
+            "required": true,
+            "schema": {
+              "title": "Number",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-company-id",
+            "required": true,
+            "schema": {
+              "title": "X-Company-Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-actor",
+            "required": false,
+            "schema": {
+              "default": "unknown",
+              "title": "X-Actor",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PickListIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OrderOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The request could not be understood"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The caller is not identified"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The caller may not do this"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The company, document or route does not exist"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The request clashes with one already made"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The request did not match the contract, or a domain rule refused it"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The platform failed unexpectedly"
+          }
+        },
+        "summary": "Create Order Pick List",
+        "tags": [
+          "sales"
+        ]
+      }
+    },
+    "/api/v1/sales-orders/{number}/pick-list/lines/{line_no}": {
+      "post": {
+        "description": "Record how much of one pick-list line was picked.",
+        "operationId": "record_order_pick_api_v1_sales_orders__number__pick_list_lines__line_no__post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "number",
+            "required": true,
+            "schema": {
+              "title": "Number",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "line_no",
+            "required": true,
+            "schema": {
+              "title": "Line No",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-company-id",
+            "required": true,
+            "schema": {
+              "title": "X-Company-Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-actor",
+            "required": false,
+            "schema": {
+              "default": "unknown",
+              "title": "X-Actor",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PickedQuantityIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OrderOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The request could not be understood"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The caller is not identified"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The caller may not do this"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The company, document or route does not exist"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The request clashes with one already made"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The request did not match the contract, or a domain rule refused it"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The platform failed unexpectedly"
+          }
+        },
+        "summary": "Record Order Pick",
+        "tags": [
+          "sales"
+        ]
+      }
+    },
+    "/api/v1/sales-orders/{number}/shipments": {
+      "post": {
+        "description": "Ship named lines of a confirmed order, issuing stock out of one warehouse.\n\nThe refusal a second shipment for the same quantity produces is the point: what an\norder still owes is read from the line, and shipping more is refused rather than\nsilently clamped.",
+        "operationId": "ship_sales_order_api_v1_sales_orders__number__shipments_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "number",
+            "required": true,
+            "schema": {
+              "title": "Number",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-company-id",
+            "required": true,
+            "schema": {
+              "title": "X-Company-Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-actor",
+            "required": false,
+            "schema": {
+              "default": "unknown",
+              "title": "X-Actor",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ShipmentIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OrderOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The request could not be understood"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The caller is not identified"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The caller may not do this"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The company, document or route does not exist"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The request clashes with one already made"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The request did not match the contract, or a domain rule refused it"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The platform failed unexpectedly"
+          }
+        },
+        "summary": "Ship Sales Order",
+        "tags": [
+          "sales"
         ]
       }
     }

@@ -151,6 +151,11 @@ class Customer(SoftDeleteMixin, Base):
     #   0             no credit at all (prepayment or cash only)
     #   > 0           a real ceiling; T-3.AR.06 pauses new commitments above it
     credit_limit: Mapped[Decimal | None] = mapped_column(MONEY)
+    # The pricing tier this customer sits in (T-3.SALES.06). Null means it sits in no
+    # tier, which is not the same as a tier named "none": a rule scoped to a tier must
+    # not match a customer nobody has tiered. Free of a tier master because the plan
+    # names tiers as a *dimension* of a price rule, not as a master of their own.
+    tier: Mapped[str | None] = mapped_column(String(32))
 
     party: Mapped[Party] = relationship()
 
@@ -415,6 +420,25 @@ def set_transaction_currency(
 ) -> Customer:
     """Change the currency this customer is invoiced in, validated like the first."""
     customer.transaction_currency = _currency_or_base(session, customer.company_id, currency)
+    session.flush()
+    return customer
+
+
+def set_customer_tier(
+    session: Session, customer: Customer, *, tier: str | None
+) -> Customer:
+    """Put this customer in a pricing tier, or take it out of one.
+
+    Null is "in no tier" — the state a rule scoped to a tier must **not** match. The
+    tier is stored on the customer rather than resolved from a master because a tier is
+    a dimension of a price rule (T-3.SALES.06), and a rule names it by code.
+    """
+    stated = None if tier is None else str(tier).strip()
+    if stated == "":
+        raise InvalidCustomerDataError(
+            "a tier is a name or null; an empty string is neither"
+        )
+    customer.tier = stated
     session.flush()
     return customer
 

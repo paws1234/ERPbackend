@@ -65,7 +65,15 @@ from sqlalchemy.orm import Mapped, Session, mapped_column
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app.audit import set_actor
-from app.company import Company, UnknownCompanyError, company_base_currency
+from app.company import (
+    CREDIT_CHECK_MODES,
+    Company,
+    UnknownCompanyError,
+    UnknownCreditCheckMode,
+    company_base_currency,
+    credit_check_mode_of,
+    set_credit_check_mode,
+)
 from app.db import Base, scope_to_company
 from app.ledger.accounts import (
     UnknownAccountError,
@@ -132,10 +140,38 @@ from app.sales.pipeline import (
     opportunity_by_id,
     stage_by_name,
 )
+from app.sales.campaigns import (
+    CouponError,
+    coupon_by_code,
+    define_coupon,
+    redeem_coupon,
+)
+from app.sales.pricing import (
+    PricingError,
+    define_rule,
+    resolve_price,
+)
 from app.sales.orders import (
+    BREACHED,
+    CONFIRMED,
+    CreditDecision,
     OrderError,
+    confirm_order,
     convert_quotation_to_order,
+    credit_decision_for,
+    order_by_number,
     order_total,
+)
+from app.sales.fulfilment import (
+    FulfilmentError,
+    Shipment,
+    generate_pick_list,
+    pick_list_for,
+    pick_lines,
+    record_picked,
+    remaining_quantity,
+    ship_order,
+    shipments_for,
 )
 from app.sales.quotations import (
     QuotationError,
@@ -147,6 +183,8 @@ from app.sales.quotations import (
     quotation_by_number,
     reprice_quotation,
 )
+from app.stock.items import Item, ItemError, item_by_sku
+from app.stock.locations import LocationError, location_by_code
 from app.security import (
     AccessDenied,
     hidden_fields,
@@ -284,6 +322,15 @@ class CompanyOut(BaseModel):
     name: str
     base_currency: str
     fiscal_year_start_month: int
+    # T-3.SALES.04: the credit-check policy this company has stated, or null when it has
+    # stated none — which the order-time check treats differently from "off".
+    credit_check_mode: str | None = None
+
+
+class CreditCheckModeIn(BaseModel):
+    """The policy a company is stating, or null to withdraw it (back to unstated)."""
+
+    mode: str | None
 
 
 # --- T-1.ACCT.01 — the chart of accounts --------------------------------
@@ -642,6 +689,13 @@ async def _unknown_company(_request: Request, exc: UnknownCompanyError) -> JSONR
     return _error(422, "unknown_company", str(exc))
 
 
+@app.exception_handler(UnknownCreditCheckMode)
+async def _unknown_credit_mode(
+    _request: Request, exc: UnknownCreditCheckMode
+) -> JSONResponse:
+    return _error(422, "unknown_credit_check_mode", str(exc))
+
+
 @app.exception_handler(UnknownCurrencyError)
 async def _unknown_currency(_request: Request, exc: UnknownCurrencyError) -> JSONResponse:
     return _error(422, "unknown_currency", str(exc))
@@ -684,6 +738,31 @@ async def _quotation_error(_request: Request, exc: QuotationError) -> JSONRespon
 @app.exception_handler(OrderError)
 async def _order_error(_request: Request, exc: OrderError) -> JSONResponse:
     return _error(422, "order_error", str(exc))
+
+
+@app.exception_handler(CouponError)
+async def _coupon_error(_request: Request, exc: CouponError) -> JSONResponse:
+    return _error(422, "coupon_error", str(exc))
+
+
+@app.exception_handler(ItemError)
+async def _item_error(_request: Request, exc: ItemError) -> JSONResponse:
+    return _error(422, "item_error", str(exc))
+
+
+@app.exception_handler(PricingError)
+async def _pricing_error(_request: Request, exc: PricingError) -> JSONResponse:
+    return _error(422, "pricing_error", str(exc))
+
+
+@app.exception_handler(FulfilmentError)
+async def _fulfilment_error(_request: Request, exc: FulfilmentError) -> JSONResponse:
+    return _error(422, "fulfilment_error", str(exc))
+
+
+@app.exception_handler(LocationError)
+async def _location_error(_request: Request, exc: LocationError) -> JSONResponse:
+    return _error(422, "location_error", str(exc))
 
 
 @app.exception_handler(IncompleteSourceError)
@@ -1580,6 +1659,9 @@ class QuotationLineOut(BaseModel):
     uom: str
     unit_price: str
     rule_code: str | None = None
+    # T-3.SALES.06: the rank that decided between overlapping rules, recorded with the
+    # price so the line states the resolution order and not only the winner.
+    rule_priority: int | None = None
     priced_on: date
     amount: str
 
@@ -1936,6 +2018,24 @@ class OrderLineIn(BaseModel):
     on: date | None = None
 
 
+class CreditDecisionOut(BaseModel):
+    """The order-time credit decision as it was recorded (T-3.SALES.04).
+
+    Every field is the value *at the moment of confirmation* — the mode then, the limit
+    then, the exposure then — which is why a later change to any of them leaves this
+    answer untouched.
+    """
+
+    mode: str
+    limit: str | None = None
+    exposure: str
+    order_value: str
+    exposure_after: str
+    breached: bool
+    acknowledged_by: str | None = None
+    decided_at: datetime
+
+
 class OrderLineOut(BaseModel):
     """One ordered line — the quotation's, carried across without re-keying."""
 
@@ -1945,8 +2045,75 @@ class OrderLineOut(BaseModel):
     uom: str
     unit_price: str
     rule_code: str | None = None
+    # Carried across from the quotation with the price (T-3.SALES.06).
+    rule_priority: int | None = None
     priced_on: date
     amount: str
+    # T-3.SALES.05: what has left, and what the order still owes on this line.
+    shipped: str
+    remaining: str
+
+
+class PickListLineOut(BaseModel):
+    """One line of the picker's paper: what the order asks, and what was picked."""
+
+    line_no: int
+    item_sku: str | None = None
+    quantity: str
+    uom: str
+    picked_quantity: str
+
+
+class PickListOut(BaseModel):
+    number: str
+    created_on: date
+    lines: list[PickListLineOut]
+
+
+class PickListIn(BaseModel):
+    number: str
+    on: date | None = None
+
+
+class PickedQuantityIn(BaseModel):
+    """How much of one pick-list line was picked."""
+
+    quantity: str
+
+
+class ShipmentLineOut(BaseModel):
+    """One line as it left, and the stock movement that carried it out."""
+
+    line_no: int
+    quantity: str
+    uom: str
+    movement: str | None = None
+
+
+class ShipmentOut(BaseModel):
+    number: str
+    warehouse: str
+    shipped_on: date
+    lines: list[ShipmentLineOut]
+
+
+class ShipmentLineIn(BaseModel):
+    line_no: int
+    quantity: str
+
+
+class ShipmentIn(BaseModel):
+    """What a shipment needs: where from, and how much of which lines.
+
+    The lines come with the header because a shipment with nothing on it moves no
+    stock — the boundary refuses an empty list rather than storing a document that
+    describes nothing.
+    """
+
+    number: str
+    warehouse: str
+    on: date | None = None
+    lines: Annotated[list[ShipmentLineIn], Field(min_length=1)]
 
 
 class OrderOut(BaseModel):
@@ -1959,6 +2126,30 @@ class OrderOut(BaseModel):
     ordered_on: date
     lines: list[OrderLineOut]
     total: str
+    # T-3.SALES.04: the lifecycle, and the credit decision taken at confirmation.
+    status: str
+    confirmed_at: datetime | None = None
+    confirmed_by: str | None = None
+    credit_decision: CreditDecisionOut | None = None
+    # T-3.SALES.05: what fulfilment had to say — the picker's paper, and what shipped.
+    pick_list: PickListOut | None = None
+    shipments: list[ShipmentOut]
+
+
+class ConfirmOrderIn(BaseModel):
+    """What confirming an order needs: the customer's exposure, and any acceptance.
+
+    The **exposure is stated by the caller** until T-3.AR.06 computes it across open
+    AR — the path this task's own recorded stop chose. `acknowledge_breach` is the
+    acknowledgement `warn` mode requires: an explicit act, so a breach is never
+    accepted by the mere act of asking.
+    """
+
+    exposure: str
+    # Nullable rather than merely defaulted: T-0.API.01's convention is that an
+    # optional field says so in the contract, so "not acknowledged" is an explicit null
+    # and not an implicit absence. Only `true` acknowledges.
+    acknowledge_breach: bool | None = None
 
 
 def _quotation_out(session: Session, quotation) -> QuotationOut:
@@ -1983,12 +2174,71 @@ def _quotation_out(session: Session, quotation) -> QuotationOut:
                 uom=line.uom,
                 unit_price=_money(line.unit_price),
                 rule_code=line.rule_code,
+                rule_priority=line.rule_priority,
                 priced_on=line.priced_on,
                 amount=_money(line_amount(line)),
             )
             for line in lines
         ],
         total=_money(sum((line_amount(line) for line in lines), Decimal(0))),
+    )
+
+
+def _credit_decision_out(decision: CreditDecision | None) -> CreditDecisionOut | None:
+    """One recorded decision as the API states it, or nothing while the order is a draft."""
+    if decision is None:
+        return None
+    return CreditDecisionOut(
+        mode=decision.mode,
+        limit=None if decision.limit_amount is None else _money(decision.limit_amount),
+        exposure=_money(decision.exposure),
+        order_value=_money(decision.order_value),
+        exposure_after=_money(decision.exposure + decision.order_value),
+        breached=decision.outcome == BREACHED,
+        acknowledged_by=decision.acknowledged_by,
+        decided_at=decision.decided_at,
+    )
+
+
+def _pick_list_out(session: Session, pick_list) -> PickListOut | None:
+    """The picker's paper as the API states it, or nothing when none was drawn."""
+    if pick_list is None:
+        return None
+    return PickListOut(
+        number=pick_list.number,
+        created_on=pick_list.created_on,
+        lines=[
+            PickListLineOut(
+                line_no=line.line_no,
+                item_sku=(
+                    None
+                    if line.item_id is None
+                    else session.get(Item, line.item_id).sku
+                ),
+                quantity=_money(line.quantity),
+                uom=line.uom,
+                picked_quantity=_money(line.picked_quantity),
+            )
+            for line in pick_lines(session, pick_list)
+        ],
+    )
+
+
+def _shipment_out(shipment: Shipment) -> ShipmentOut:
+    """One shipment as the API states it, each line pointing at its own movement."""
+    return ShipmentOut(
+        number=shipment.number,
+        warehouse=shipment.location.code,
+        shipped_on=shipment.shipped_on,
+        lines=[
+            ShipmentLineOut(
+                line_no=line.line_no,
+                quantity=_money(line.quantity),
+                uom=line.uom,
+                movement=None if line.movement_id is None else str(line.movement_id),
+            )
+            for line in shipment.lines
+        ],
     )
 
 
@@ -2003,6 +2253,15 @@ def _order_out(session: Session, order) -> OrderOut:
         ),
         currency=order.currency,
         ordered_on=order.ordered_on,
+        status=order.status,
+        confirmed_at=order.confirmed_at,
+        confirmed_by=order.confirmed_by,
+        credit_decision=_credit_decision_out(credit_decision_for(session, order)),
+        pick_list=_pick_list_out(session, pick_list_for(session, order)),
+        shipments=[
+            _shipment_out(shipment)
+            for shipment in shipments_for(session, order)
+        ],
         lines=[
             OrderLineOut(
                 line_no=line.line_no,
@@ -2011,8 +2270,11 @@ def _order_out(session: Session, order) -> OrderOut:
                 uom=line.uom,
                 unit_price=_money(line.unit_price),
                 rule_code=line.rule_code,
+                rule_priority=line.rule_priority,
                 priced_on=line.priced_on,
                 amount=_money(line.quantity * line.unit_price),
+                shipped=_money(line.shipped_quantity),
+                remaining=_money(remaining_quantity(line)),
             )
             for line in lines
         ],
@@ -2157,5 +2419,510 @@ def order_from_quotation(
         session, quotation, number=payload.number, on=payload.on
     )
     response = _order_out(session, order)
+    session.commit()
+    return response
+
+
+# --- T-3.SALES.04: the order's lifecycle and its order-time credit decision ----
+# T-3.SALES.03 could raise an order but not confirm one. These are the paths that
+# make confirmation what it is: the company states a credit-check policy, confirming
+# applies it, and the decision is written down with the limit, the exposure and the
+# order value that produced it, so a later change to any of them cannot restate it.
+
+
+@app.post(
+    f"{BASE}/companies/current/credit-check-mode",
+    response_model=CompanyOut,
+    tags=["platform"],
+)
+def set_company_credit_check_mode(
+    payload: CreditCheckModeIn, context: Context
+) -> CompanyOut:
+    """State, change or withdraw this company's credit-check policy.
+
+    Plan §8 leaves the mode undecided, so the body carries a value or an explicit null
+    rather than relying on a default: "not stated" is a state a company may be in, and
+    the order-time check treats it as a refusal rather than as `off`.
+
+    Changing the mode is forward-looking only — decisions already recorded keep the mode
+    they were taken under, because each one stored it.
+    """
+    session = context.session
+    require(
+        session,
+        company_id=context.company_id,
+        subject=context.actor,
+        capability="company.configure",
+        entity="company",
+        entity_id=context.company_id,
+    )
+    company = session.get(Company, context.company_id)
+    if company is None:
+        raise ApiError(404, "company_not_found", f"no company {context.company_id}")
+    set_credit_check_mode(session, company, mode=payload.mode)
+    response = CompanyOut(
+        id=str(company.id),
+        code=company.code,
+        name=company.name,
+        base_currency=company.base_currency,
+        fiscal_year_start_month=company.fiscal_year_start_month,
+        credit_check_mode=company.credit_check_mode,
+    )
+    session.commit()
+    return response
+
+
+@app.get(
+    f"{BASE}/sales-orders/{{number}}", response_model=OrderOut, tags=["sales"]
+)
+def sales_order(number: str, context: Context) -> OrderOut:
+    """One order with its lifecycle and the credit decision taken at confirmation."""
+    session = context.session
+    require(
+        session,
+        company_id=context.company_id,
+        subject=context.actor,
+        capability="order.read",
+        entity="sales_order",
+    )
+    order = order_by_number(session, company_id=context.company_id, number=number)
+    return _order_out(session, order)
+
+
+@app.post(
+    f"{BASE}/sales-orders/{{number}}/confirm",
+    response_model=OrderOut,
+    tags=["sales"],
+)
+def confirm_sales_order(
+    number: str, payload: ConfirmOrderIn, context: Context
+) -> OrderOut:
+    """Confirm an order, applying the company's credit-check mode as it is placed.
+
+    The exposure is **stated by the caller** until T-3.AR.06 computes it across open
+    AR. The refusal a `block` breach produces is the point of the endpoint: it is the
+    one place an order stops being an intention.
+    """
+    session = context.session
+    require(
+        session,
+        company_id=context.company_id,
+        subject=context.actor,
+        capability="order.write",
+        entity="sales_order",
+    )
+    order = order_by_number(session, company_id=context.company_id, number=number)
+    confirm_order(
+        session,
+        order,
+        exposure=payload.exposure,
+        actor=context.actor,
+        acknowledge_breach=payload.acknowledge_breach is True,
+    )
+    response = _order_out(session, order)
+    session.commit()
+    return response
+
+
+# --- T-3.SALES.05: pick lists, shipping, and the stock they move ---------------
+# Confirming an order promises nothing physically. These paths are the other half:
+# a pick list drawn from the confirmed lines, what was picked off the shelf, and the
+# shipment that issues stock out of a warehouse — through T-1.INV.05's `issue`, so the
+# valuation, the no-negative-stock rule and the GL posting are the shared ones.
+
+
+@app.post(
+    f"{BASE}/sales-orders/{{number}}/pick-list",
+    response_model=OrderOut,
+    status_code=201,
+    tags=["sales"],
+)
+def create_order_pick_list(
+    number: str, payload: PickListIn, context: Context
+) -> OrderOut:
+    """Draw the pick list for a confirmed order — exactly its lines, once."""
+    session = context.session
+    require(
+        session,
+        company_id=context.company_id,
+        subject=context.actor,
+        capability="order.write",
+        entity="sales_order",
+    )
+    order = order_by_number(session, company_id=context.company_id, number=number)
+    generate_pick_list(session, order, number=payload.number, on=payload.on)
+    response = _order_out(session, order)
+    session.commit()
+    return response
+
+
+@app.post(
+    f"{BASE}/sales-orders/{{number}}/pick-list/lines/{{line_no}}",
+    response_model=OrderOut,
+    tags=["sales"],
+)
+def record_order_pick(
+    number: str, line_no: int, payload: PickedQuantityIn, context: Context
+) -> OrderOut:
+    """Record how much of one pick-list line was picked."""
+    session = context.session
+    require(
+        session,
+        company_id=context.company_id,
+        subject=context.actor,
+        capability="order.write",
+        entity="sales_order",
+    )
+    order = order_by_number(session, company_id=context.company_id, number=number)
+    listed = pick_list_for(session, order)
+    if listed is None:
+        raise ApiError(
+            404,
+            "no_pick_list",
+            f"sales order {order.number!r} has no pick list to record against",
+        )
+    record_picked(session, listed, line_no=line_no, quantity=payload.quantity)
+    response = _order_out(session, order)
+    session.commit()
+    return response
+
+
+@app.post(
+    f"{BASE}/sales-orders/{{number}}/shipments",
+    response_model=OrderOut,
+    status_code=201,
+    tags=["sales"],
+)
+def ship_sales_order(number: str, payload: ShipmentIn, context: Context) -> OrderOut:
+    """Ship named lines of a confirmed order, issuing stock out of one warehouse.
+
+    The refusal a second shipment for the same quantity produces is the point: what an
+    order still owes is read from the line, and shipping more is refused rather than
+    silently clamped.
+    """
+    session = context.session
+    require(
+        session,
+        company_id=context.company_id,
+        subject=context.actor,
+        capability="order.write",
+        entity="sales_order",
+    )
+    order = order_by_number(session, company_id=context.company_id, number=number)
+    warehouse = location_by_code(
+        session, company_id=context.company_id, code=payload.warehouse
+    )
+    ship_order(
+        session,
+        order,
+        number=payload.number,
+        warehouse=warehouse,
+        lines=[(line.line_no, line.quantity) for line in payload.lines],
+        on=payload.on,
+    )
+    response = _order_out(session, order)
+    session.commit()
+    return response
+
+
+# --- T-3.SALES.06: the pricing engine — ordered rules over tier and volume -------
+# A rule is a scope (item, customer tier, volume band) plus a discount. The engine
+# resolves overlapping rules in one fixed order and says so: `code` and `priority` are
+# written onto the line that was priced, so an offer can be reproduced after the rules
+# behind it have changed.
+
+
+class PriceRuleIn(BaseModel):
+    """One rule as it is filed: its scope, and the discount it applies.
+
+    Every dimension is optional and an omitted one means **no constraint** — an absent
+    tier is any tier — while `discount_type` must be stated, because the ledger records
+    no default and a rule with an invented one would silently discount by the wrong
+    measure.
+    """
+
+    code: str
+    name: str
+    discount_type: str
+    discount_value: str
+    item_sku: str | None = None
+    tier: str | None = None
+    # Nullable rather than merely defaulted (T-0.API.01's convention): an omitted band
+    # floor or ordering is an explicit null that the caller's own defaults fill in.
+    min_quantity: str | None = None
+    max_quantity: str | None = None
+    priority: int | None = None
+
+
+class PriceRuleOut(BaseModel):
+    code: str
+    name: str
+    item_sku: str | None = None
+    tier: str | None = None
+    min_quantity: str
+    max_quantity: str | None = None
+    priority: int
+    discount_type: str
+    discount_value: str
+
+
+class PriceQueryIn(BaseModel):
+    """What to price, before any rule has been applied to it.
+
+    `base_price` is stated by the caller because the plan names no price list and the
+    item master holds none: the engine decides which rule applies and what it does, not
+    what the goods list at.
+    """
+
+    base_price: str
+    quantity: str | None = None
+    item_sku: str | None = None
+    customer_code: str | None = None
+    tier: str | None = None
+
+
+class PriceDecisionOut(BaseModel):
+    """The engine's answer, with the whole ordering it decided in."""
+
+    base_price: str
+    price: str
+    rule_code: str | None = None
+    rule_priority: int | None = None
+    # Every rule that matched, best first — so a caller can say which rules lost and why.
+    considered: list[PriceRuleOut]
+
+
+def _price_rule_out(rule, session: Session) -> PriceRuleOut:
+    return PriceRuleOut(
+        code=rule.code,
+        name=rule.name,
+        item_sku=None if rule.item_id is None else session.get(Item, rule.item_id).sku,
+        tier=rule.tier,
+        min_quantity=_money(rule.min_quantity),
+        max_quantity=None if rule.max_quantity is None else _money(rule.max_quantity),
+        priority=rule.priority,
+        discount_type=rule.discount_type,
+        discount_value=_money(rule.discount_value),
+    )
+
+
+@app.post(
+    f"{BASE}/price-rules", response_model=PriceRuleOut, status_code=201, tags=["sales"]
+)
+def create_price_rule(payload: PriceRuleIn, context: Context) -> PriceRuleOut:
+    """File one pricing rule."""
+    session = context.session
+    require(
+        session,
+        company_id=context.company_id,
+        subject=context.actor,
+        capability="pricing.configure",
+        entity="price_rule",
+    )
+    item_id = None
+    if payload.item_sku is not None:
+        item_id = item_by_sku(
+            session, company_id=context.company_id, sku=payload.item_sku
+        ).id
+    rule = define_rule(
+        session,
+        company_id=context.company_id,
+        code=payload.code,
+        name=payload.name,
+        discount_type=payload.discount_type,
+        discount_value=payload.discount_value,
+        item_id=item_id,
+        tier=payload.tier,
+        min_quantity=payload.min_quantity or 1,
+        max_quantity=payload.max_quantity,
+        priority=payload.priority if payload.priority is not None else 100,
+    )
+    response = _price_rule_out(rule, session)
+    session.commit()
+    return response
+
+
+@app.post(
+    f"{BASE}/price-rules/resolve",
+    response_model=PriceDecisionOut,
+    tags=["sales"],
+)
+def resolve_price_rule(payload: PriceQueryIn, context: Context) -> PriceDecisionOut:
+    """What the engine makes of one prospective line, and the order it decided in.
+
+    The tier comes from the customer when one is named, so a caller cannot price a
+    customer's order under a tier that customer does not sit in.
+    """
+    session = context.session
+    require(
+        session,
+        company_id=context.company_id,
+        subject=context.actor,
+        capability="order.read",
+        entity="price_rule",
+    )
+    item_id = None
+    if payload.item_sku is not None:
+        item_id = item_by_sku(
+            session, company_id=context.company_id, sku=payload.item_sku
+        ).id
+    tier = payload.tier
+    if payload.customer_code is not None:
+        tier = customer_by_code(
+            session, company_id=context.company_id, code=payload.customer_code
+        ).tier
+    decision = resolve_price(
+        session,
+        company_id=context.company_id,
+        base_price=payload.base_price,
+        quantity=payload.quantity or 1,
+        item_id=item_id,
+        tier=tier,
+    )
+    return PriceDecisionOut(
+        base_price=_money(decision.base_price),
+        price=_money(decision.price),
+        rule_code=decision.rule_code,
+        rule_priority=decision.rule_priority,
+        considered=[_price_rule_out(rule, session) for rule in decision.considered],
+    )
+
+
+# --- T-3.SALES.07: campaigns and coupons — scoped codes with a life --------------
+# The engine resolves rules over item, tier, volume **and campaign**; a coupon is a
+# code that adds a discount on top, inside its own window, up to its own usage limit,
+# and within the strictest stacking allowance on the document it is used on. Its use
+# is recorded against that document, which is what stops it being spent forever.
+
+
+class CouponIn(BaseModel):
+    """A coupon as it is filed: its campaign, its discount and its own limits.
+
+    Every limit is stated here rather than defaulted, because the plan states none of
+    them: an omitted window is *always open* and an omitted usage limit is *no limit*,
+    which are different answers from "closed today" and "unusable".
+    """
+
+    code: str
+    name: str
+    campaign: str
+    discount_type: str
+    discount_value: str
+    stacking_allowance: int
+    valid_from: date | None = None
+    valid_until: date | None = None
+    max_redemptions: int | None = None
+
+
+class CouponOut(BaseModel):
+    code: str
+    name: str
+    campaign: str
+    discount_type: str
+    discount_value: str
+    valid_from: date | None = None
+    valid_until: date | None = None
+    max_redemptions: int | None = None
+    stacking_allowance: int
+
+
+class CouponRedeemIn(BaseModel):
+    """Which document is using the coupon, and what the price is before it applies."""
+
+    document_type: str
+    document_id: str
+    base_price: str
+    on: date | None = None
+
+
+class CouponRedemptionOut(BaseModel):
+    code: str
+    campaign: str
+    document_type: str
+    document_id: str
+    discount_amount: str
+
+
+def _coupon_out(coupon) -> CouponOut:
+    return CouponOut(
+        code=coupon.code,
+        name=coupon.name,
+        campaign=coupon.campaign,
+        discount_type=coupon.discount_type,
+        discount_value=_money(coupon.discount_value),
+        valid_from=coupon.valid_from,
+        valid_until=coupon.valid_until,
+        max_redemptions=coupon.max_redemptions,
+        stacking_allowance=coupon.stacking_allowance,
+    )
+
+
+@app.post(
+    f"{BASE}/coupons", response_model=CouponOut, status_code=201, tags=["sales"]
+)
+def create_coupon(payload: CouponIn, context: Context) -> CouponOut:
+    """File one coupon."""
+    session = context.session
+    require(
+        session,
+        company_id=context.company_id,
+        subject=context.actor,
+        capability="pricing.configure",
+        entity="coupon",
+    )
+    coupon = define_coupon(
+        session,
+        company_id=context.company_id,
+        code=payload.code,
+        name=payload.name,
+        campaign=payload.campaign,
+        discount_type=payload.discount_type,
+        discount_value=payload.discount_value,
+        stacking_allowance=payload.stacking_allowance,
+        valid_from=payload.valid_from,
+        valid_until=payload.valid_until,
+        max_redemptions=payload.max_redemptions,
+    )
+    response = _coupon_out(coupon)
+    session.commit()
+    return response
+
+
+@app.post(
+    f"{BASE}/coupons/{{code}}/redeem",
+    response_model=CouponRedemptionOut,
+    tags=["sales"],
+)
+def redeem(payload: CouponRedeemIn, code: str, context: Context) -> CouponRedemptionOut:
+    """Use a coupon on a document, recording the use against that document.
+
+    The refusals are the point: an unknown code, one outside its window, one used to
+    its limit and one stacked past the allowance each answer with the reason, and none
+    of them writes a redemption.
+    """
+    session = context.session
+    require(
+        session,
+        company_id=context.company_id,
+        subject=context.actor,
+        capability="order.write",
+        entity="coupon",
+    )
+    coupon = coupon_by_code(session, company_id=context.company_id, code=code)
+    row = redeem_coupon(
+        session,
+        coupon,
+        document_type=payload.document_type,
+        document_id=_document_id(payload.document_id),
+        base_price=payload.base_price,
+        on=payload.on,
+    )
+    response = CouponRedemptionOut(
+        code=coupon.code,
+        campaign=coupon.campaign,
+        document_type=row.document_type,
+        document_id=str(row.document_id),
+        discount_amount=_money(row.discount_amount),
+    )
     session.commit()
     return response

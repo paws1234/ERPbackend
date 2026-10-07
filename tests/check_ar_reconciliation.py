@@ -20,6 +20,8 @@ Green on all seven:
    does not
 7. the reconciliation says what it found in words a person can act on
 
+5b. an invoice whose **document date and posting date differ** reconciles on both dates
+
 6b. a window that ends **before it starts** is refused rather than reconciled
 
 **Scratch database only**: it drops and recreates the public schema.
@@ -279,6 +281,42 @@ def main() -> int:
             f" the quiet {DAY + timedelta(days=2)}..{DAY + timedelta(days=5)} balances at"
             f" zero on both sides while {outstanding} is still outstanding — a position"
             " and a movement are not the same figure"
+        )
+
+        # 5b — a document dated one day and posted another reconciles on both dates
+        skewed = create_invoice(
+            session, company_id=COMPANY, number="AR-SKEWED", customer=acme,
+            invoice_date=DAY + timedelta(days=4),
+            lines=[{"description": "Goods", "quantity": "1", "unit_price": "100.00"}],
+        )
+        session.commit()
+        post_invoice(session, skewed, posting_date=DAY)
+        session.commit()
+        on_document_date = reconcile(
+            session, company_id=COMPANY, as_of=DAY, start=DAY
+        )
+        php_dated = next(
+            row for row in on_document_date["currencies"] if row["currency"] == "PHP"
+        )
+        # The invoice is dated four days after the day it was posted, so a date-of-document
+        # sweep would leave it out of the subledger while the control account holds it.
+        assert subledger_balance(
+            session, company_id=COMPANY, currency="PHP", as_of=DAY
+        ) == expected + _gross("100"), subledger_balance(
+            session, company_id=COMPANY, currency="PHP", as_of=DAY
+        )
+        assert php_dated["difference"] == Decimal("-250.000000"), php_dated
+        later = reconcile(
+            session, company_id=COMPANY, as_of=DAY + timedelta(days=4), start=DAY
+        )
+        php_later = next(
+            row for row in later["currencies"] if row["currency"] == "PHP"
+        )
+        assert php_later["subledger"] == (expected + _gross("100")), php_later
+        print(
+            f"5b. an invoice dated four days after the entry it posted reconciles on both"
+            f" dates: the subledger reads {php_later['subledger']} because it follows the"
+            " posting, not the date printed on the document"
         )
 
         # 6b — a window that ends before it starts is refused

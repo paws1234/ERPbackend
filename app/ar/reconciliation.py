@@ -97,14 +97,25 @@ def subledger_balance(
     postings that decide it rather than a figure kept beside them — which is what lets
     a partial receipt (T-3.AR.05) move both sides of this comparison by the same
     amount rather than by two amounts that have to be kept in step.
+
+    "As at" is the date the invoice was **posted** (its entry's own date), because that
+    is the date the control account is read by.
     """
-    statement = select(CustomerInvoice).where(
-        CustomerInvoice.company_id == company_id,
-        CustomerInvoice.currency == str(currency),
-        CustomerInvoice.status == "posted",
+    statement = (
+        select(CustomerInvoice)
+        .join(JournalEntry, JournalEntry.id == CustomerInvoice.journal_entry_id)
+        .where(
+            CustomerInvoice.company_id == company_id,
+            CustomerInvoice.currency == str(currency),
+            CustomerInvoice.status == "posted",
+        )
     )
     if as_of is not None:
-        statement = statement.where(CustomerInvoice.invoice_date <= as_of)
+        # The **posting** date, not the document's: `post_invoice` accepts a posting
+        # date of its own, and the control account is read by the date the entry was
+        # posted. Comparing a document-dated subledger with a posting-dated ledger
+        # would report a difference that is only a lag between the two dates.
+        statement = statement.where(JournalEntry.posting_date <= as_of)
     total = Decimal(0)
     for invoice in session.scalars(statement):
         total += open_amount(session, invoice, as_of=as_of)
@@ -127,18 +138,25 @@ def subledger_movement(
     in the window it was *posted* in — the same window the control account counts it
     in. Comparing a position to a movement would report every correct period as a
     difference, which is the one thing a reconciliation must never do.
+
+    Both sides follow the **ledger's** dates: an invoice counts in the window its entry
+    was posted in (not the date printed on the document), and a settlement in the
+    window it was settled in — which is the date its receipt was posted.
     """
+    # The invoices raised inside the window, dated by their **posting** — the date the
+    # control account saw them — not by the document's own date.
     raised = (
         select(func.coalesce(func.sum(CustomerInvoice.gross_amount), 0))
+        .join(JournalEntry, JournalEntry.id == CustomerInvoice.journal_entry_id)
         .where(
             CustomerInvoice.company_id == company_id,
             CustomerInvoice.currency == str(currency),
             CustomerInvoice.status == "posted",
-            CustomerInvoice.invoice_date >= start,
+            JournalEntry.posting_date >= start,
         )
     )
     if as_of is not None:
-        raised = raised.where(CustomerInvoice.invoice_date <= as_of)
+        raised = raised.where(JournalEntry.posting_date <= as_of)
     settled = (
         select(func.coalesce(func.sum(CustomerInvoiceSettlement.amount), 0))
         .join(CustomerInvoice, CustomerInvoice.id == CustomerInvoiceSettlement.invoice_id)

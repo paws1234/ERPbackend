@@ -90,6 +90,9 @@ OUTPUT_TAX_KEY = "output_tax"
 
 # The document type a stock issue from a till carries.
 DOC_TYPE = "pos_sale"
+# What a refund carries: the return of the goods and the reversal of the entry, so a
+# reversed sale is findable from the reports that state it.
+REFUND_DOC_TYPE = "pos_sale_refund"
 
 
 class PosError(ValueError):

@@ -40,6 +40,7 @@ from sqlalchemy.orm import Session
 from app.ledger.posting import JournalEntry, post_journal_entry
 from app.pos.drawer import drawer_state, movements_for, tender_breakdown
 from app.pos.sales import (
+    REFUND_DOC_TYPE,
     COMPLETED,
     MONEY_SCALE,
     OPEN,
@@ -59,11 +60,6 @@ from app.pos.shifts import (
 from app.stock.items import Item, ItemVariant
 from app.stock.locations import Location
 from app.stock.transactions import receive
-
-# The document type a refund's stock return carries, and the one its entry carries, so
-# a reversed sale is findable from the Z-Report that reports it.
-REFUND_DOC_TYPE = "pos_sale_refund"
-
 
 class ReportError(ValueError):
     """The report refused what was asked of it."""

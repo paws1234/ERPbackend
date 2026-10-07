@@ -12,8 +12,10 @@ Green on all seven:
 3. an **injected difference is reported, per day and per terminal** — an extra posting
    against a sale shows as a difference on both accounts it touched, and a movement with
    no line to explain it shows on the stock side
-4. a **voided sale is not counted twice**: a refund's reversing entry and its stock return
-   are not added to the day's takings, which stay the sales that stand
+4. a **refund is counted on the day it happened**, not the day of the sale it reverses:
+   a sale rung up yesterday and refunded today leaves yesterday's takings and yesterday's
+   stock alone, and appears on today's — a reversal entry and a stock return beside the
+   sales of today, both sides still agreeing
 5. the reconciliation is **re-runnable** — the same call returns the same figures, because
    both sides are read from the rows each time
 6. the day's figures are stated **per terminal as well as whole**, so a day that balances
@@ -28,7 +30,7 @@ from __future__ import annotations
 import os
 import sys
 import uuid
-from datetime import date
+from datetime import date, timedelta
 from decimal import Decimal
 
 from sqlalchemy import create_engine, select
@@ -128,9 +130,9 @@ def main() -> int:
         gross = (Decimal("100") * VAT).quantize(Decimal("0.000001"))
 
         def ring_up(number: str, *, terminal="T1", place=None, cash=None, card=None,
-                    quantity="1"):
+                    quantity="1", on=DAY):
             sale = open_sale(session, company_id=COMPANY, number=number, terminal=terminal,
-                             location=place or till, sold_on=DAY)
+                             location=place or till, sold_on=on)
             session.flush()
             scan(session, sale, barcode=BARCODE, base_price="100.00", quantity=quantity)
             session.commit()
@@ -199,6 +201,7 @@ def main() -> int:
         assert injected["balanced"] is False, injected
         revenue = mapped_account(session, company_id=COMPANY, key="revenue").code
         bank = mapped_account(session, company_id=COMPANY, key="bank").code
+        cash = mapped_account(session, company_id=COMPANY, key="cash").code
         assert injected["gl"]["differences"][revenue] == Decimal("-50.000000"), (
             injected["gl"]["differences"]
         )
@@ -219,29 +222,68 @@ def main() -> int:
             f" ({injected['stock']['differences'][(other.id, None)]})"
         )
 
-        # 4 — a refund is not counted as takings
-        refunded = ring_up("POS-A3", cash=str(gross))
-        before_void = reconcile(session, company_id=COMPANY, on=DAY)
-        void_sale(session, refunded, reason="wrong size", actor="maria")
+        # 4 — a refund belongs to the day it happened, not the day of the sale
+        yesterday = DAY - timedelta(days=1)
+        earlier = ring_up("POS-A4", cash=str(gross), on=yesterday)
+        its_day = reconcile(session, company_id=COMPANY, on=yesterday)
+        assert its_day["balanced"] is True, its_day
+        assert its_day["gl"]["sales"] == 1 and its_day["gl"]["refunds"] == 0, its_day["gl"]
+        void_sale(session, earlier, reason="wrong size", actor="maria", on=DAY)
         session.commit()
-        after_void = reconcile(session, company_id=COMPANY, on=DAY)
-        assert after_void["gl"]["sales"] == before_void["gl"]["sales"] - 1, (
-            before_void["gl"]["sales"],
-            after_void["gl"]["sales"],
+        # The sale stands in its own day: the takings it took were taken, and what
+        # reverses them is a document of the day the money went back out.
+        still_its_day = reconcile(session, company_id=COMPANY, on=yesterday)
+        assert still_its_day["gl"]["sales"] == 1, still_its_day["gl"]
+        assert still_its_day["gl"]["gross"] == gross, still_its_day["gl"]
+        assert still_its_day["gl"]["refunds"] == 0, still_its_day["gl"]
+        assert still_its_day["balanced"] is True, still_its_day
+        assert still_its_day["stock"]["expected"] == {(item.id, None): Decimal("-1.000000")}, (
+            still_its_day["stock"]
         )
-        assert after_void["gl"]["gross"] == (
-            before_void["gl"]["gross"] - gross
-        ).quantize(Decimal("0.000001")), after_void["gl"]
-        assert after_void["gl"]["differences"][revenue] == Decimal("-50.000000"), (
-            after_void["gl"]["differences"]
+        # ...and today's day absorbs it, on both sides, beside today's own sales.
+        refunded_day = reconcile(session, company_id=COMPANY, on=DAY)
+        assert refunded_day["gl"]["refunds"] == 1, refunded_day["gl"]
+        assert refunded_day["gl"]["refunded"] == gross, refunded_day["gl"]
+        # The day's own takings are unchanged (the refunded sale was yesterday's), so
+        # the injected difference of section 3 is the only one either side still shows.
+        assert refunded_day["gl"]["differences"][revenue] == Decimal("-50.000000"), (
+            refunded_day["gl"]["differences"]
         )
-        assert after_void["stock"]["expected"][(item.id, None)] == Decimal("-4.000000"), (
-            after_void["stock"]
+        assert refunded_day["stock"]["expected"][(item.id, None)] == Decimal("-3.000000"), (
+            refunded_day["stock"]
+        )
+        # Same-day: the sale stays among the day's takings and the refund stands beside
+        # it — both counted, on both sides, so the day still agrees with itself. Its
+        # goods left and came back, so the day's stock expectation is unmoved by it.
+        same_day = ring_up("POS-A5", card=str(gross))
+        void_sale(session, same_day, reason="changed mind", actor="maria", on=DAY)
+        session.commit()
+        both = reconcile(session, company_id=COMPANY, on=DAY)
+        assert both["gl"]["sales"] == 4, both["gl"]
+        assert both["gl"]["gross"] == (5 * gross).quantize(Decimal("0.000001")), both["gl"]
+        assert both["gl"]["refunds"] == 2, both["gl"]
+        assert both["gl"]["refunded"] == (2 * gross).quantize(Decimal("0.000001")), both["gl"]
+        assert both["gl"]["differences"][revenue] == Decimal("-50.000000"), (
+            both["gl"]["differences"]
+        )
+        assert both["gl"]["differences"][cash] == Decimal("0.000000"), (
+            both["gl"]["differences"]
+        )
+        assert both["gl"]["differences"][bank] == Decimal("50.000000"), (
+            both["gl"]["differences"]
+        )
+        assert both["stock"]["expected"][(item.id, None)] == Decimal("-3.000000"), (
+            both["stock"]
+        )
+        assert both["stock"]["differences"][(item.id, None)] == Decimal("0.000000"), (
+            both["stock"]
         )
         print(
-            f"4. refunding {refunded.number} took the day's takings back to"
-            f" {after_void['gl']['gross']} — the sale no longer stands, so neither its"
-            " entry nor its stock return is counted among them"
+            f"4. refunding {earlier.number} took nothing off {yesterday}'s takings"
+            f" ({still_its_day['gl']['gross']} of 1 sale, balanced) and {both['gl']['refunds']}"
+            f" refunds ({both['gl']['refunded']} gross) sit beside today's"
+            f" {both['gl']['sales']} sales ({both['gl']['gross']}) with both sides"
+            " agreeing about the money and the goods"
         )
 
         # 7 — a tender that reached no account is reported

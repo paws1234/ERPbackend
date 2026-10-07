@@ -190,6 +190,7 @@ from app.ar.dunning import DunningError
 from app.ar.exposure import ExposureError
 from app.ar.gateway import GatewayError
 from app.ar.invoices import InvoiceError
+from app.ar.reconciliation import ReconciliationError as ArReconciliationError
 from app.ar.recurring import RecurringError
 from app.sales.tax import TaxError
 from app.security import (
@@ -800,6 +801,13 @@ async def _dunning_error(_request: Request, exc: DunningError) -> JSONResponse:
 @app.exception_handler(RecurringError)
 async def _recurring_error(_request: Request, exc: RecurringError) -> JSONResponse:
     return _error(422, "recurring_error", str(exc))
+
+
+@app.exception_handler(ArReconciliationError)
+async def _ar_reconciliation_error(
+    _request: Request, exc: ArReconciliationError
+) -> JSONResponse:
+    return _error(422, "reconciliation_error", str(exc))
 
 
 @app.exception_handler(LocationError)

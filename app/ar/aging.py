@@ -32,6 +32,8 @@ rather than presenting a sum that looks like a balance and is not one.
 
 from __future__ import annotations
 
+import csv
+import io
 import uuid
 from datetime import date
 from decimal import Decimal
@@ -43,7 +45,7 @@ from app.ar.invoices import CustomerInvoice, open_amount, open_invoices, settled
 # The receivables control account is read through T-3.AR.07's own reader rather than
 # re-derived here: it is the same figure the reconciliation compares, so the two can
 # never drift apart.
-from app.ar.reconciliation import control_balance
+from app.ar.reconciliation import control_balance, currencies_in_use
 from app.sales.customers import Customer
 
 # One money scale for the whole platform.
@@ -161,16 +163,28 @@ class Report:
         The control figure is **read from the ledger**, never kept here, so the two
         sides' only shared input is the postings themselves. The comparison is per
         currency because both sides are in the document's own currency, and mixing
-        them would need a rate neither stored.
+        them would need a rate neither stored — and it sweeps every currency either
+        side is stated in, so a currency the account holds with nothing owed in it is
+        reported as the difference it is rather than skipped.
         """
+        # Every currency either side is stated in, not only the ones the open invoices
+        # happen to be in: a posting that reached the control account in a currency
+        # nothing is owed in is exactly the difference a reconciliation exists to
+        # report, and sweeping only the subledger's currencies would hide it. The
+        # subledger's side of such a currency is zero.
+        compared = sorted(
+            set(self.total_by_currency) | set(currencies_in_use(session, company_id=company_id))
+        )
         self.control = {
             currency: control_balance(
                 session, company_id=company_id, currency=currency, as_of=self.as_of
             )
-            for currency in self.total_by_currency
+            for currency in compared
         }
         self.difference = {
-            currency: (self.total_by_currency[currency] - held).quantize(MONEY_SCALE)
+            currency: (self.total_by_currency.get(currency, Decimal(0)) - held).quantize(
+                MONEY_SCALE
+            )
             for currency, held in self.control.items()
         }
 
@@ -265,36 +279,47 @@ def aging_csv(report: Report) -> str:
     """The report as CSV: one row per aged invoice, then the bucket totals.
 
     The buckets are spelled out in the header, so an exported aging report still
-    says what its columns mean.
+    says what its columns mean. The rows go through the csv module rather than through
+    string joins: a customer name may hold a comma or a newline, and a report whose
+    columns shift because somebody's name has a comma in it is not an export anybody
+    can parse.
     """
-    lines = [
-        "invoice,customer,customer_name,invoice_date,due_date,days_past_due,bucket,"
-        "currency,gross_amount,settled,open_amount"
-    ]
+    out = io.StringIO()
+    writer = csv.writer(out)
+    writer.writerow(
+        ["invoice", "customer", "customer_name", "invoice_date", "due_date",
+         "days_past_due", "bucket", "currency", "gross_amount", "settled",
+         "open_amount"]
+    )
     for row in report.invoices:
-        lines.append(
-            f"{row['invoice']},{row['customer']},{row['customer_name']},"
-            f"{row['invoice_date']},{row['due_date']},{row['days_past_due']},"
-            f"{row['bucket']},{row['currency']},{row['gross_amount']},"
-            f"{row['settled']},{row['open_amount']}"
+        writer.writerow(
+            [row["invoice"], row["customer"], row["customer_name"], row["invoice_date"],
+             row["due_date"], row["days_past_due"], row["bucket"], row["currency"],
+             row["gross_amount"], row["settled"], row["open_amount"]]
         )
-    lines.append("")
+    writer.writerow([])
     for label, low, high in report.buckets:
-        span = f"{low}+" if high is None else (f"{low}" if low == high else f"{low}-{high}")
-        lines.append(f"{label} ({span} days),,,{report.totals[label]}")
+        writer.writerow([f"{label} ({_span(low, high)} days)", "", "", report.totals[label]])
     if len(report.totals_by_currency) > 1:
         for currency, totals in sorted(report.totals_by_currency.items()):
             for label, low, high in report.buckets:
-                span = f"{low}+" if high is None else (
-                    f"{low}" if low == high else f"{low}-{high}"
+                writer.writerow(
+                    [f"{currency} {label} ({_span(low, high)} days)", "", "", totals[label]]
                 )
-                lines.append(f"{currency} {label} ({span} days),,,{totals[label]}")
-            lines.append(
-                f"{currency} total as at {report.as_of},,,{report.total_by_currency[currency]}"
+            writer.writerow(
+                [f"{currency} total as at {report.as_of}", "", "",
+                 report.total_by_currency[currency]]
             )
-    lines.append(f"total as at {report.as_of},,,{report.total}")
+    writer.writerow([f"total as at {report.as_of}", "", "", report.total])
     for currency, held in sorted(report.control.items()):
         prefix = f"{currency} " if len(report.control) > 1 else ""
-        lines.append(f"{prefix}control account as at {report.as_of},,,{held}")
-        lines.append(f"{prefix}subledger less control,,,{report.difference[currency]}")
-    return "\n".join(lines) + "\n"
+        writer.writerow([f"{prefix}control account as at {report.as_of}", "", "", held])
+        writer.writerow(
+            [f"{prefix}subledger less control", "", "", report.difference[currency]]
+        )
+    return out.getvalue()
+
+
+def _span(low: int, high: int | None) -> str:
+    """One bucket's row label: `30+`, a single day, or a closed range."""
+    return f"{low}+" if high is None else (f"{low}" if low == high else f"{low}-{high}")

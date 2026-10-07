@@ -22,11 +22,16 @@ Green on all eight:
 8. the export carries the buckets by name and the comparison, so an exported report
    still says what it means
 
+8b. a customer name with a **comma and a newline** survives the CSV export, and a
+   currency only the **control account** holds is compared rather than skipped
+
 **Scratch database only**: it drops and recreates the public schema.
 """
 
 from __future__ import annotations
 
+import csv
+import io
 import os
 import sys
 import uuid
@@ -159,6 +164,11 @@ def main() -> int:
                                name="Acme Retail", payment_terms_days=30)
         boreal = create_customer(session, company_id=COMPANY, party_code="BOREAL",
                                  name="Boreal Trading", payment_terms_days=0)
+        # A name with a comma and a newline in it: what the export has to quote, or its
+        # columns shift and nobody can read the file back.
+        awkward = create_customer(session, company_id=COMPANY, party_code="AWKWARD",
+                                  name='Awkward, "Quote"\nNewline Ltd',
+                                  payment_terms_days=30)
         session.commit()
 
         # Terms of 30 unless the helper is told otherwise; BOREAL is due on receipt.
@@ -333,6 +343,48 @@ def main() -> int:
             f"8. the export has one row per aged invoice plus the bucket totals, with the"
             f" buckets named and the control comparison"
             f" ({len(export.strip().splitlines())} lines)"
+        )
+
+        # 8b — a name with a comma in it survives the export, and a currency only the
+        # control account holds is compared rather than skipped
+        _invoice(session, awkward, "AR-AWK", invoice_date=date(2026, 12, 10), terms=30,
+                 amount="120.00")
+        session.commit()
+        read_back = list(csv.reader(io.StringIO(aging_csv(
+            aging(session, company_id=COMPANY, as_of=AS_OF)
+        ))))
+        named = [row for row in read_back if row and row[0] == "AR-AWK"]
+        assert named and named[0][2] == awkward.party.name, named
+        print(
+            f"8b. a customer called {awkward.party.name!r} kept its comma and its newline"
+            f" through the export: the row still parses to 11 columns"
+            f" ({len(named[0])})"
+        )
+
+        # A posting straight to the control account in a currency nothing is owed in: the
+        # comparison has to state it, not sweep only the currencies the invoices use.
+        register_currency(session, company_id=COMPANY, code="GBP", name="Pound")
+        store_rate(session, company_id=COMPANY, base_currency="PHP", currency="GBP",
+                   on=AS_OF, rate="78.0")
+        session.commit()
+        post_journal_entry(
+            session, company_id=COMPANY, posting_date=AS_OF, currency="GBP",
+            memo="a receipt the subledger has never heard of", source_type="manual",
+            source_id=uuid.uuid4(),
+            lines=[{"account": "1100", "debit": Decimal("75")},
+                   {"account": "4000", "credit": Decimal("75")}],
+        )
+        session.commit()
+        lonely = aging(session, company_id=COMPANY, as_of=AS_OF)
+        assert "GBP" in lonely.control, lonely.control
+        assert lonely.control["GBP"] == Decimal("75.000000"), lonely.control
+        assert lonely.difference["GBP"] == Decimal("-75.000000"), lonely.difference
+        assert lonely.balanced is False, "a control-only currency read as balanced"
+        assert report.balanced is True, "the earlier report changed"
+        print(
+            f"8c. a 75.00 posting in GBP, a currency no invoice is stated in, is reported"
+            f" as the difference it is ({lonely.difference['GBP']}) rather than skipped:"
+            " the sweep is both sides' currencies, not the subledger's alone"
         )
 
         # 9 — the report is re-runnable and an as_of earlier than an invoice sees none of it

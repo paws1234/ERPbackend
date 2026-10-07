@@ -187,6 +187,7 @@ from app.stock.items import Item, ItemError, item_by_sku
 from app.stock.locations import LocationError, location_by_code
 from app.ar.aging import AgingError
 from app.ar.invoices import InvoiceError
+from app.ar.recurring import RecurringError
 from app.sales.tax import TaxError
 from app.security import (
     AccessDenied,
@@ -776,6 +777,11 @@ async def _tax_error(_request: Request, exc: TaxError) -> JSONResponse:
 @app.exception_handler(AgingError)
 async def _aging_error(_request: Request, exc: AgingError) -> JSONResponse:
     return _error(422, "aging_error", str(exc))
+
+
+@app.exception_handler(RecurringError)
+async def _recurring_error(_request: Request, exc: RecurringError) -> JSONResponse:
+    return _error(422, "recurring_error", str(exc))
 
 
 @app.exception_handler(LocationError)

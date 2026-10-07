@@ -367,12 +367,16 @@ def main() -> int:
         complete_sale(session, late)
         session.commit()
         assert late.shift_id == overnight.id, late.shift_id
+        paid_out(session, company_id=COMPANY, terminal="T3", amount="10.00",
+                 reason="next-day courier", actor="jose", on=tomorrow)
+        session.commit()
         next_day = day_report(session, company_id=COMPANY, on=tomorrow)
         assert next_day["shifts"] == [], next_day["shifts"]
         assert next_day["sales"] == 1, next_day
         assert next_day["gross"] == gross, next_day
         assert next_day["shiftless"]["sales"] == 1, next_day["shiftless"]
-        assert next_day["expected_cash"] == gross, next_day
+        assert next_day["shiftless"]["movements"] == Decimal("-10.000000"), next_day
+        assert next_day["expected_cash"] == gross - Decimal("10"), next_day
         assert shift_report(session, overnight)["gross"] == gross, (
             shift_report(session, overnight)
         )

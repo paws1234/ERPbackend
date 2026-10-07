@@ -50,7 +50,6 @@ from app.db import Base
 from app.ledger.posting import JournalEntry
 from app.pos.drawer import (
     CASH,
-    PAID_IN,
     DrawerMovement,
     drawer_state,
     movements_for,
@@ -337,22 +336,13 @@ def shift_totals(session: Session, shift: PosShift) -> dict:
     """
     sales = shift_sales(session, shift)
     movements = shift_movements(session, shift)
-    # A paid-in recorded as the shift's own opening float is that figure, not a movement
-    # beside it: counting both would put the float in the drawer twice. Matched on the
-    # movement's kind as well as on that reason — a cash withdrawal somebody described as
-    # a float is a withdrawal, and dropping it would hide money that left the drawer.
-    float_movements = [
-        row
-        for row in movements
-        if not (row.movement_type == PAID_IN and row.reason == OPENING_FLOAT_REASON)
-    ]
     # A refund made while this drawer was trading is cash out of the drawer the count
     # will not find — the sale it reverses stays counted above, so without this the
     # expectation would be too high by exactly what was handed back.
     refunded = refunds_on(
         session, company_id=shift.company_id, on=shift.opened_on, terminal=shift.terminal
     )
-    state = drawer_state(sales, float_movements)
+    state = drawer_state(sales, movements)
     expected = (
         state["expected"] - refund_cash(refunded) + Decimal(shift.opening_float)
     ).quantize(MONEY_SCALE)
@@ -374,10 +364,6 @@ def shift_totals(session: Session, shift: PosShift) -> dict:
         ).quantize(MONEY_SCALE),
         "refunds": [sale.number for sale in refunded],
     }
-
-
-# The reason a float movement carries when it is already the shift's own opening float.
-OPENING_FLOAT_REASON = "opening float"
 
 
 def close_shift(

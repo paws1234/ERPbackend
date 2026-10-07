@@ -49,12 +49,10 @@ from app.pos.sales import (
     PosSaleLine,
 )
 from app.pos.shifts import (
-    OPENING_FLOAT_REASON,
     PosShift,
     abandoned_baskets,
     refund_cash,
     refunds_on,
-    shift_movements,
     shift_totals,
 )
 from app.stock.items import Item, ItemVariant
@@ -300,6 +298,7 @@ def day_report(session: Session, *, company_id: uuid.UUID, on: date) -> dict:
     ]
     day_sales = _day_sales(session, company_id=company_id, on=on)
     refunds = refunds_on(session, company_id=company_id, on=on)
+    day_movements = movements_for(session, company_id=company_id, on=on)
     claimed = {shift.id for shift in shifts}
     orphans = [sale for sale in day_sales if sale.shift_id not in claimed]
     # Every sale of the day lands in exactly one bucket: its own shift's, or the one for
@@ -314,14 +313,14 @@ def day_report(session: Session, *, company_id: uuid.UUID, on: date) -> dict:
         # cash on the next day too, and that next day's report is where it belongs —
         # counting the whole shift's history on the day it opened would add tomorrow's
         # cash to today and take it out of tomorrow.
-        float_only = [
+        shift_day_movements = [
             row
-            for row in shift_movements(session, shift)
-            if row.reason != OPENING_FLOAT_REASON and row.moved_on == on
+            for row in day_movements
+            if row.shift_id == shift.id
         ]
         bucket = _bucket(
             sales,
-            float_only,
+            shift_day_movements,
             [sale for sale in refunds if sale.terminal == shift.terminal],
         )
         bucket.update(
@@ -342,11 +341,7 @@ def day_report(session: Session, *, company_id: uuid.UUID, on: date) -> dict:
     traded = {shift.terminal for shift in shifts}
     shiftless = _bucket(
         shiftless_sales,
-        [
-            row
-            for row in movements_for(session, company_id=company_id, on=on)
-            if row.reason != OPENING_FLOAT_REASON and row.shift_id is None
-        ],
+        [row for row in day_movements if row.shift_id not in claimed],
         # Refunds made where no shift was trading that day: the till with no drawer
         # management its own self, and a refund rung on a terminal whose shift is not
         # one of the day's.

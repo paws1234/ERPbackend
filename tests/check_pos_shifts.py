@@ -55,7 +55,7 @@ from app.db import Base  # noqa: E402
 from app.ledger.accounts import create_account  # noqa: E402
 from app.ledger.currency import register_currency  # noqa: E402
 from app.ledger.mapping import set_mapping  # noqa: E402
-from app.pos.drawer import paid_out  # noqa: E402
+from app.pos.drawer import paid_in, paid_out  # noqa: E402
 from app.pos.sales import (  # noqa: E402
     CARD,
     CASH,
@@ -340,6 +340,18 @@ def main() -> int:
             f" {described.reason!r} is still money that left the drawer"
             f" ({after_withdrawal['expected_cash']} expected), because what is the"
             " shift's own float is its kind and its reason, not the words alone"
+        )
+
+        float_paid_in = paid_in(session, company_id=COMPANY, terminal="T3", amount="7.50",
+                                reason="opening float", actor="maria", on=DAY)
+        session.commit()
+        after_paid_in = shift_totals(session, third)
+        assert float_paid_in.shift_id == third.id, float_paid_in.shift_id
+        assert after_paid_in["movements"] == Decimal("-7.500000"), after_paid_in
+        assert after_paid_in["expected_cash"] == Decimal("92.500000"), after_paid_in
+        print(
+            "8d. a paid-in described as 'opening float' remains a movement; the shift's"
+            " separately stated opening float is not inferred from free-text"
         )
 
         # 8b — the day's second shift on one till does not wear the first's movements

@@ -187,6 +187,7 @@ from app.stock.items import Item, ItemError, item_by_sku
 from app.stock.locations import LocationError, location_by_code
 from app.ar.aging import AgingError
 from app.ar.dunning import DunningError
+from app.ar.gateway import GatewayError
 from app.ar.invoices import InvoiceError
 from app.ar.recurring import RecurringError
 from app.sales.tax import TaxError
@@ -768,6 +769,11 @@ async def _fulfilment_error(_request: Request, exc: FulfilmentError) -> JSONResp
 @app.exception_handler(InvoiceError)
 async def _invoice_error(_request: Request, exc: InvoiceError) -> JSONResponse:
     return _error(422, "invoice_error", str(exc))
+
+
+@app.exception_handler(GatewayError)
+async def _gateway_error(_request: Request, exc: GatewayError) -> JSONResponse:
+    return _error(422, "gateway_error", str(exc))
 
 
 @app.exception_handler(TaxError)

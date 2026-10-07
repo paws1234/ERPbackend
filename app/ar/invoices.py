@@ -225,6 +225,16 @@ class CustomerInvoiceSettlement(Base):
     __tablename__ = "customer_invoice_settlement"
     __table_args__ = (
         CheckConstraint("amount > 0", name="ck_customer_settlement_amount"),
+# One document settles one invoice once: the same gateway payment (or receipt)
+        # arriving twice must not take the amount off the customer's account twice.
+        # T-3.AR.05's boundary already refuses a replayed delivery; this is the guard
+        # that holds even for a caller that skips it.
+        UniqueConstraint(
+            "invoice_id",
+            "source_type",
+            "source_id",
+            name="uq_customer_settlement_once_per_source",
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)

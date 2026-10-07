@@ -25,6 +25,10 @@ Green on all nine:
 9. documents in another **currency** are reported beside the figure, never added into it
    — and a caller that still states an exposure is honoured exactly as before
 
+10. goods **shipped but not yet invoiced** stay in the exposure: a four-of-ten shipment
+   left the figure where it was, and invoicing it moved the net from `unbilled` to the
+   invoice's gross
+
 **Scratch database only**: it drops and recreates the public schema.
 """
 
@@ -60,7 +64,12 @@ from app.ledger.currency import register_currency, store_rate  # noqa: E402
 from app.ledger.mapping import set_mapping  # noqa: E402
 from app.ledger.posting import post_journal_entry  # noqa: E402
 from app.sales.customers import create_customer, set_credit_limit  # noqa: E402
-from app.sales.fulfilment import Shipment  # noqa: E402,F401 — for its table
+from app.sales.fulfilment import (  # noqa: E402
+    Shipment,
+    generate_pick_list,
+    record_picked,
+    ship_order,
+)
 from app.sales.orders import (  # noqa: E402
     CreditLimitExceeded,
     confirm_order,
@@ -68,7 +77,10 @@ from app.sales.orders import (  # noqa: E402
 )
 from app.sales.pipeline import Opportunity  # noqa: E402,F401 — for its table
 from app.sales.quotations import add_line, create_quotation  # noqa: E402
-from tests.seed import seed_accounts  # noqa: E402
+from app.stock.items import create_item  # noqa: E402
+from app.stock.locations import create_location  # noqa: E402
+from app.stock.transactions import receive  # noqa: E402
+from tests.seed import seed_stock_accounts  # noqa: E402
 
 COMPANY = uuid.uuid4()
 # Before the day the check runs: confirmation computes the live exposure as at
@@ -120,7 +132,9 @@ def main() -> int:
         register_currency(session, company_id=COMPANY, code="PHP", name="Peso")
         register_currency(session, company_id=COMPANY, code="USD", name="US Dollar")
         session.commit()
-        seed_accounts(session, company_id=COMPANY)
+        # The usual chart plus the stock mappings: the section below ships goods, and
+        # an issue posts through `inventory`/`stock_issue` (T-1.INV.07).
+        seed_stock_accounts(session, company_id=COMPANY)
         create_account(session, company_id=COMPANY, code="2200", name="Output VAT",
                        account_class="liability")
         set_mapping(session, company_id=COMPANY, key="receivables", account_code="1100")
@@ -418,6 +432,82 @@ def main() -> int:
             f" ({credited.other_currencies}) and asked for in its own currency"
             f" ({stated.total}); and an exposure the caller states is still recorded"
             f" verbatim ({decision.exposure})"
+        )
+
+        # 10 — goods shipped but not yet invoiced stay in the exposure
+        widget = create_item(session, company_id=COMPANY, sku="WIDGET", name="Widget",
+                             base_uom="each", traceability_mode="none")
+        warehouse = create_location(session, company_id=COMPANY, code="MAIN",
+                                    name="Main", location_type="warehouse")
+        zone = create_location(session, company_id=COMPANY, code="MAIN-Z", name="Zone",
+                               location_type="zone", parent_id=warehouse.id)
+        aisle = create_location(session, company_id=COMPANY, code="MAIN-1", name="Aisle",
+                                location_type="aisle", parent_id=zone.id)
+        bin_a = create_location(session, company_id=COMPANY, code="MAIN-1-A", name="Bin A",
+                                location_type="bin", parent_id=aisle.id)
+        session.commit()
+        receive(session, item=widget, location=bin_a, uom="each", quantity="10",
+                value=Decimal("400"), currency="PHP", source_type="goods_receipt",
+                source_id=uuid.uuid4(), posting_date=DAY)
+        session.commit()
+
+        quote_four = create_quotation(session, company_id=COMPANY, customer_id=acme.id,
+                                      number="Q-4", issued_on=DAY,
+                                       valid_until=date(2026, 12, 31))
+        session.flush()
+        add_line(session, quote_four, line_no=1, description="Widget", quantity="10",
+                 unit_price="100.00", uom="each", item_id=widget.id, priced_on=DAY)
+        session.flush()
+        fourth = convert_quotation_to_order(session, quote_four, number="SO-4", on=DAY)
+        confirm_order(session, fourth, actor="maria")
+        session.commit()
+        before_shipping = customer_exposure(session, acme, as_of=DAY)
+        assert before_shipping.components[UNBILLED] >= Decimal("1000.000000"), (
+            before_shipping.components
+        )
+        committed = before_shipping.components[UNBILLED]
+
+        listed = generate_pick_list(session, fourth, number="PL-4", on=DAY)
+        record_picked(session, listed, line_no=1, quantity="4")
+        session.commit()
+        fourth = session.scalar(select(type(fourth)).where(type(fourth).number == "SO-4"))
+        shipment = ship_order(session, fourth, number="SH-4", warehouse=bin_a,
+                              lines=[(1, "4")], on=DAY)
+        session.commit()
+        assert fourth.lines[0].shipped_quantity == Decimal("4.000000"), (
+            fourth.lines[0].shipped_quantity
+        )
+        shipped_only = customer_exposure(session, acme, as_of=DAY)
+        assert shipped_only.components[UNBILLED] == committed, (
+            "shipping four units without invoicing them freed up credit"
+        )
+        assert shipped_only.total == before_shipping.total, (
+            shipped_only.total, before_shipping.total
+        )
+
+        billed = create_invoice(
+            session, company_id=COMPANY, number="AR-SO4", customer=acme,
+            invoice_date=DAY, order_id=fourth.id, shipment_id=shipment.id,
+            lines=[{"description": "Widget", "item_id": widget.id, "quantity": "4",
+                    "uom": "each", "unit_price": "100.00",
+                    "order_line_id": fourth.lines[0].id,
+                    "shipment_line_id": shipment.lines[0].id}],
+        )
+        session.commit()
+        post_invoice(session, billed)
+        session.commit()
+        invoiced = customer_exposure(session, acme, as_of=DAY)
+        assert invoiced.components[UNBILLED] == committed - Decimal("400.000000"), (
+            invoiced.components, committed
+        )
+        assert invoiced.components[INVOICED] == (
+            shipped_only.components[INVOICED] + Decimal("448.000000")
+        ), (invoiced.components, shipped_only.components)
+        print(
+            f"10. four of SO-4's ten units shipped without an invoice left the exposure"
+            f" exactly where it was ({invoiced.components[UNBILLED]} +"
+            f" {invoiced.components[INVOICED]} of it billed): measuring the order from"
+            " the shipment would have freed credit for goods the customer already has"
         )
 
     print("\ncheck_credit_exposure: all assertions green")

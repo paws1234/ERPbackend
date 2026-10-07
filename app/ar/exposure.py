@@ -156,10 +156,12 @@ def _unbilled_by_currency(
 ) -> dict[str, Decimal]:
     """What confirmed orders still commit the customer to, per currency.
 
-    The order's lines less what has shipped: the goods promised and not yet billed.
-    The arithmetic is `order_total`'s (T-3.SALES.04) — quantity times unit price —
-    applied to the remaining quantity, so an order and the exposure it causes cannot
-    disagree about what a line is worth.
+    The order's lines less what has been **invoiced** for it: the goods promised or
+    delivered and not yet billed. The arithmetic is `order_total`'s (T-3.SALES.04) —
+    quantity times unit price — so an order and the exposure it causes cannot disagree
+    about what a line is worth, and the subtraction follows the invoice rather than the
+    shipment, because a shipped order nobody has invoiced yet is exactly the money the
+    customer owes with nothing on the ledger to say so.
     """
     # Imported here rather than at the top: `app.sales.orders` reads this module (that
     # is the point of T-3.AR.06 — one implementation of the exposure), so importing it
@@ -175,13 +177,44 @@ def _unbilled_by_currency(
     totals: dict[str, Decimal] = {}
     for order in session.scalars(statement):
         currency = _order_currency(session, order, customer)
-        committed = Decimal(0)
-        for line in order.lines:
-            remaining = (line.quantity - line.shipped_quantity).quantize(MONEY_SCALE)
-            if remaining > 0:
-                committed += (remaining * line.unit_price).quantize(MONEY_SCALE)
-        totals[currency] = totals.get(currency, Decimal(0)) + committed
+        ordered = sum(
+            ((line.quantity * line.unit_price).quantize(MONEY_SCALE) for line in order.lines),
+            Decimal(0),
+        )
+        # What is left of the order is what has not been **invoiced**, not what has not
+        # been shipped: T-3.SALES.05 raises `shipped_quantity` when goods leave, and
+        # T-3.AR.01 raises the invoice afterwards, so measuring from the shipment would
+        # drop shipped-but-unbilled goods out of the exposure for as long as the
+        # invoicing lags — opening headroom for goods the customer already has. Once the
+        # invoice exists its own gross is in the `invoiced` component, which is why the
+        # net billed is what comes off here.
+        billed = _billed_net(session, order, currency=currency, as_of=as_of)
+        committed = (ordered - billed).quantize(MONEY_SCALE)
+        if committed > 0:
+            totals[currency] = totals.get(currency, Decimal(0)) + committed
     return totals
+
+
+def _billed_net(
+    session: Session, order, *, currency: str, as_of: date
+) -> Decimal:
+    """What this order has been invoiced for, net of tax, in one currency."""
+    from app.ar.invoices import POSTED, CustomerInvoice
+
+    return sum(
+        (
+            Decimal(invoice.net_amount)
+            for invoice in session.scalars(
+                select(CustomerInvoice).where(
+                    CustomerInvoice.order_id == order.id,
+                    CustomerInvoice.currency == currency,
+                    CustomerInvoice.status == POSTED,
+                    CustomerInvoice.invoice_date <= as_of,
+                )
+            )
+        ),
+        Decimal(0),
+    ).quantize(MONEY_SCALE)
 
 
 def customer_exposure(

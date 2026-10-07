@@ -196,6 +196,7 @@ from app.ar.recurring import RecurringError
 from app.sales.tax import TaxError
 from app.pos.drawer import DrawerError
 from app.pos.drawer import record_movement
+from app.pos.reconciliation import reconcile as reconcile_pos
 from app.pos.reports import ReportError, day_report, shift_report, void_sale
 from app.pos.sales import (
     PosError,
@@ -3461,6 +3462,21 @@ def pos_day_report(on: date, context: Context) -> PosReportOut:
             capability="pos.read", entity="pos_report")
     return PosReportOut(
         report=_jsonable(day_report(session, company_id=context.company_id, on=on))
+    )
+
+
+@app.get(f"{BASE}/pos/reconciliation", response_model=PosReportOut, tags=["pos"])
+def pos_reconciliation(
+    on: date, context: Context, terminal: str | None = None
+) -> PosReportOut:
+    """The day's takings and stock against the ledger, per day and per terminal."""
+    session = context.session
+    require(session, company_id=context.company_id, subject=context.actor,
+            capability="pos.read", entity="pos_sale")
+    return PosReportOut(
+        report=_jsonable(
+            reconcile_pos(session, company_id=context.company_id, on=on, terminal=terminal)
+        )
     )
 
 

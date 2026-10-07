@@ -899,6 +899,17 @@
             ],
             "title": "Rule Code"
           },
+          "rule_priority": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rule Priority"
+          },
           "shipped": {
             "title": "Shipped",
             "type": "string"
@@ -1428,6 +1439,268 @@
         "title": "PipelineStageOut",
         "type": "object"
       },
+      "PriceDecisionOut": {
+        "description": "The engine's answer, with the whole ordering it decided in.",
+        "properties": {
+          "base_price": {
+            "title": "Base Price",
+            "type": "string"
+          },
+          "considered": {
+            "items": {
+              "$ref": "#/components/schemas/PriceRuleOut"
+            },
+            "title": "Considered",
+            "type": "array"
+          },
+          "price": {
+            "title": "Price",
+            "type": "string"
+          },
+          "rule_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rule Code"
+          },
+          "rule_priority": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rule Priority"
+          }
+        },
+        "required": [
+          "base_price",
+          "price",
+          "considered"
+        ],
+        "title": "PriceDecisionOut",
+        "type": "object"
+      },
+      "PriceQueryIn": {
+        "description": "What to price, before any rule has been applied to it.\n\n`base_price` is stated by the caller because the plan names no price list and the\nitem master holds none: the engine decides which rule applies and what it does, not\nwhat the goods list at.",
+        "properties": {
+          "base_price": {
+            "title": "Base Price",
+            "type": "string"
+          },
+          "customer_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Customer Code"
+          },
+          "item_sku": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Item Sku"
+          },
+          "quantity": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Quantity"
+          },
+          "tier": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tier"
+          }
+        },
+        "required": [
+          "base_price"
+        ],
+        "title": "PriceQueryIn",
+        "type": "object"
+      },
+      "PriceRuleIn": {
+        "description": "One rule as it is filed: its scope, and the discount it applies.\n\nEvery dimension is optional and an omitted one means **no constraint** \u2014 an absent\ntier is any tier \u2014 while `discount_type` must be stated, because the ledger records\nno default and a rule with an invented one would silently discount by the wrong\nmeasure.",
+        "properties": {
+          "code": {
+            "title": "Code",
+            "type": "string"
+          },
+          "discount_type": {
+            "title": "Discount Type",
+            "type": "string"
+          },
+          "discount_value": {
+            "title": "Discount Value",
+            "type": "string"
+          },
+          "item_sku": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Item Sku"
+          },
+          "max_quantity": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Quantity"
+          },
+          "min_quantity": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Min Quantity"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "priority": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Priority"
+          },
+          "tier": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tier"
+          }
+        },
+        "required": [
+          "code",
+          "name",
+          "discount_type",
+          "discount_value"
+        ],
+        "title": "PriceRuleIn",
+        "type": "object"
+      },
+      "PriceRuleOut": {
+        "properties": {
+          "code": {
+            "title": "Code",
+            "type": "string"
+          },
+          "discount_type": {
+            "title": "Discount Type",
+            "type": "string"
+          },
+          "discount_value": {
+            "title": "Discount Value",
+            "type": "string"
+          },
+          "item_sku": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Item Sku"
+          },
+          "max_quantity": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Quantity"
+          },
+          "min_quantity": {
+            "title": "Min Quantity",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "priority": {
+            "title": "Priority",
+            "type": "integer"
+          },
+          "tier": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tier"
+          }
+        },
+        "required": [
+          "code",
+          "name",
+          "min_quantity",
+          "priority",
+          "discount_type",
+          "discount_value"
+        ],
+        "title": "PriceRuleOut",
+        "type": "object"
+      },
       "QuotationForOpportunityIn": {
         "description": "The number the quotation is filed under, and the day it is issued.",
         "properties": {
@@ -1614,6 +1887,17 @@
               }
             ],
             "title": "Rule Code"
+          },
+          "rule_priority": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rule Priority"
           },
           "unit_price": {
             "title": "Unit Price",
@@ -4897,6 +5181,252 @@
           }
         },
         "summary": "New Pipeline Stage",
+        "tags": [
+          "sales"
+        ]
+      }
+    },
+    "/api/v1/price-rules": {
+      "post": {
+        "description": "File one pricing rule.",
+        "operationId": "create_price_rule_api_v1_price_rules_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "x-company-id",
+            "required": true,
+            "schema": {
+              "title": "X-Company-Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-actor",
+            "required": false,
+            "schema": {
+              "default": "unknown",
+              "title": "X-Actor",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PriceRuleIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PriceRuleOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The request could not be understood"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The caller is not identified"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The caller may not do this"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The company, document or route does not exist"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The request clashes with one already made"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The request did not match the contract, or a domain rule refused it"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The platform failed unexpectedly"
+          }
+        },
+        "summary": "Create Price Rule",
+        "tags": [
+          "sales"
+        ]
+      }
+    },
+    "/api/v1/price-rules/resolve": {
+      "post": {
+        "description": "What the engine makes of one prospective line, and the order it decided in.\n\nThe tier comes from the customer when one is named, so a caller cannot price a\ncustomer's order under a tier that customer does not sit in.",
+        "operationId": "resolve_price_rule_api_v1_price_rules_resolve_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "x-company-id",
+            "required": true,
+            "schema": {
+              "title": "X-Company-Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-actor",
+            "required": false,
+            "schema": {
+              "default": "unknown",
+              "title": "X-Actor",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PriceQueryIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PriceDecisionOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The request could not be understood"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The caller is not identified"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The caller may not do this"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The company, document or route does not exist"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The request clashes with one already made"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The request did not match the contract, or a domain rule refused it"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The platform failed unexpectedly"
+          }
+        },
+        "summary": "Resolve Price Rule",
         "tags": [
           "sales"
         ]

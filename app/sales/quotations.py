@@ -196,6 +196,10 @@ class QuotationLine(Base):
     # Which pricing rule produced `unit_price`, where a rule did (T-3.SALES.06/07 fill
     # it). Null is a price a person stated, which is an honest null, not a missing one.
     rule_code: Mapped[str | None] = mapped_column(String(80))
+    # Where that rule sat in the engine's resolution order — the number that decided
+    # between overlapping rules, written down with the price so the line explains
+    # itself later, after the rules have changed (T-3.SALES.06).
+    rule_priority: Mapped[int | None] = mapped_column(Integer)
     priced_on: Mapped[date] = mapped_column(Date, nullable=False)
 
     quotation: Mapped[Quotation] = relationship(back_populates="lines")
@@ -332,6 +336,7 @@ def add_line(
     uom: str = "unit",
     item_id: uuid.UUID | None = None,
     rule_code: str | None = None,
+    rule_priority: int | None = None,
     priced_on: date | None = None,
 ) -> QuotationLine:
     """Price one line onto a quotation, recording the day the price was fixed.
@@ -382,6 +387,7 @@ def add_line(
         uom=_required(uom, f"line {wanted}'s unit of measure"),
         unit_price=price,
         rule_code=None if rule_code is None else str(rule_code).strip() or None,
+        rule_priority=None if rule_priority is None else int(rule_priority),
         priced_on=priced_on or datetime.now(timezone.utc).date(),
     )
     session.add(line)

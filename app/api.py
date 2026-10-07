@@ -140,6 +140,11 @@ from app.sales.pipeline import (
     opportunity_by_id,
     stage_by_name,
 )
+from app.sales.pricing import (
+    PricingError,
+    define_rule,
+    resolve_price,
+)
 from app.sales.orders import (
     BREACHED,
     CONFIRMED,
@@ -172,7 +177,7 @@ from app.sales.quotations import (
     quotation_by_number,
     reprice_quotation,
 )
-from app.stock.items import Item
+from app.stock.items import Item, ItemError, item_by_sku
 from app.stock.locations import LocationError, location_by_code
 from app.security import (
     AccessDenied,
@@ -727,6 +732,16 @@ async def _quotation_error(_request: Request, exc: QuotationError) -> JSONRespon
 @app.exception_handler(OrderError)
 async def _order_error(_request: Request, exc: OrderError) -> JSONResponse:
     return _error(422, "order_error", str(exc))
+
+
+@app.exception_handler(ItemError)
+async def _item_error(_request: Request, exc: ItemError) -> JSONResponse:
+    return _error(422, "item_error", str(exc))
+
+
+@app.exception_handler(PricingError)
+async def _pricing_error(_request: Request, exc: PricingError) -> JSONResponse:
+    return _error(422, "pricing_error", str(exc))
 
 
 @app.exception_handler(FulfilmentError)
@@ -1633,6 +1648,9 @@ class QuotationLineOut(BaseModel):
     uom: str
     unit_price: str
     rule_code: str | None = None
+    # T-3.SALES.06: the rank that decided between overlapping rules, recorded with the
+    # price so the line states the resolution order and not only the winner.
+    rule_priority: int | None = None
     priced_on: date
     amount: str
 
@@ -2016,6 +2034,8 @@ class OrderLineOut(BaseModel):
     uom: str
     unit_price: str
     rule_code: str | None = None
+    # Carried across from the quotation with the price (T-3.SALES.06).
+    rule_priority: int | None = None
     priced_on: date
     amount: str
     # T-3.SALES.05: what has left, and what the order still owes on this line.
@@ -2143,6 +2163,7 @@ def _quotation_out(session: Session, quotation) -> QuotationOut:
                 uom=line.uom,
                 unit_price=_money(line.unit_price),
                 rule_code=line.rule_code,
+                rule_priority=line.rule_priority,
                 priced_on=line.priced_on,
                 amount=_money(line_amount(line)),
             )
@@ -2238,6 +2259,7 @@ def _order_out(session: Session, order) -> OrderOut:
                 uom=line.uom,
                 unit_price=_money(line.unit_price),
                 rule_code=line.rule_code,
+                rule_priority=line.rule_priority,
                 priced_on=line.priced_on,
                 amount=_money(line.quantity * line.unit_price),
                 shipped=_money(line.shipped_quantity),
@@ -2590,5 +2612,168 @@ def ship_sales_order(number: str, payload: ShipmentIn, context: Context) -> Orde
     response = _order_out(session, order)
     session.commit()
     return response
+
+
+# --- T-3.SALES.06: the pricing engine — ordered rules over tier and volume -------
+# A rule is a scope (item, customer tier, volume band) plus a discount. The engine
+# resolves overlapping rules in one fixed order and says so: `code` and `priority` are
+# written onto the line that was priced, so an offer can be reproduced after the rules
+# behind it have changed.
+
+
+class PriceRuleIn(BaseModel):
+    """One rule as it is filed: its scope, and the discount it applies.
+
+    Every dimension is optional and an omitted one means **no constraint** — an absent
+    tier is any tier — while `discount_type` must be stated, because the ledger records
+    no default and a rule with an invented one would silently discount by the wrong
+    measure.
+    """
+
+    code: str
+    name: str
+    discount_type: str
+    discount_value: str
+    item_sku: str | None = None
+    tier: str | None = None
+    # Nullable rather than merely defaulted (T-0.API.01's convention): an omitted band
+    # floor or ordering is an explicit null that the caller's own defaults fill in.
+    min_quantity: str | None = None
+    max_quantity: str | None = None
+    priority: int | None = None
+
+
+class PriceRuleOut(BaseModel):
+    code: str
+    name: str
+    item_sku: str | None = None
+    tier: str | None = None
+    min_quantity: str
+    max_quantity: str | None = None
+    priority: int
+    discount_type: str
+    discount_value: str
+
+
+class PriceQueryIn(BaseModel):
+    """What to price, before any rule has been applied to it.
+
+    `base_price` is stated by the caller because the plan names no price list and the
+    item master holds none: the engine decides which rule applies and what it does, not
+    what the goods list at.
+    """
+
+    base_price: str
+    quantity: str | None = None
+    item_sku: str | None = None
+    customer_code: str | None = None
+    tier: str | None = None
+
+
+class PriceDecisionOut(BaseModel):
+    """The engine's answer, with the whole ordering it decided in."""
+
+    base_price: str
+    price: str
+    rule_code: str | None = None
+    rule_priority: int | None = None
+    # Every rule that matched, best first — so a caller can say which rules lost and why.
+    considered: list[PriceRuleOut]
+
+
+def _price_rule_out(rule, session: Session) -> PriceRuleOut:
+    return PriceRuleOut(
+        code=rule.code,
+        name=rule.name,
+        item_sku=None if rule.item_id is None else session.get(Item, rule.item_id).sku,
+        tier=rule.tier,
+        min_quantity=_money(rule.min_quantity),
+        max_quantity=None if rule.max_quantity is None else _money(rule.max_quantity),
+        priority=rule.priority,
+        discount_type=rule.discount_type,
+        discount_value=_money(rule.discount_value),
+    )
+
+
+@app.post(
+    f"{BASE}/price-rules", response_model=PriceRuleOut, status_code=201, tags=["sales"]
+)
+def create_price_rule(payload: PriceRuleIn, context: Context) -> PriceRuleOut:
+    """File one pricing rule."""
+    session = context.session
+    require(
+        session,
+        company_id=context.company_id,
+        subject=context.actor,
+        capability="pricing.configure",
+        entity="price_rule",
+    )
+    item_id = None
+    if payload.item_sku is not None:
+        item_id = item_by_sku(
+            session, company_id=context.company_id, sku=payload.item_sku
+        ).id
+    rule = define_rule(
+        session,
+        company_id=context.company_id,
+        code=payload.code,
+        name=payload.name,
+        discount_type=payload.discount_type,
+        discount_value=payload.discount_value,
+        item_id=item_id,
+        tier=payload.tier,
+        min_quantity=payload.min_quantity or 1,
+        max_quantity=payload.max_quantity,
+        priority=payload.priority if payload.priority is not None else 100,
+    )
+    response = _price_rule_out(rule, session)
+    session.commit()
+    return response
+
+
+@app.post(
+    f"{BASE}/price-rules/resolve",
+    response_model=PriceDecisionOut,
+    tags=["sales"],
+)
+def resolve_price_rule(payload: PriceQueryIn, context: Context) -> PriceDecisionOut:
+    """What the engine makes of one prospective line, and the order it decided in.
+
+    The tier comes from the customer when one is named, so a caller cannot price a
+    customer's order under a tier that customer does not sit in.
+    """
+    session = context.session
+    require(
+        session,
+        company_id=context.company_id,
+        subject=context.actor,
+        capability="order.read",
+        entity="price_rule",
+    )
+    item_id = None
+    if payload.item_sku is not None:
+        item_id = item_by_sku(
+            session, company_id=context.company_id, sku=payload.item_sku
+        ).id
+    tier = payload.tier
+    if payload.customer_code is not None:
+        tier = customer_by_code(
+            session, company_id=context.company_id, code=payload.customer_code
+        ).tier
+    decision = resolve_price(
+        session,
+        company_id=context.company_id,
+        base_price=payload.base_price,
+        quantity=payload.quantity or 1,
+        item_id=item_id,
+        tier=tier,
+    )
+    return PriceDecisionOut(
+        base_price=_money(decision.base_price),
+        price=_money(decision.price),
+        rule_code=decision.rule_code,
+        rule_priority=decision.rule_priority,
+        considered=[_price_rule_out(rule, session) for rule in decision.considered],
+    )
 
 

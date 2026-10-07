@@ -200,9 +200,11 @@ class SalesOrderLine(Base):
     quantity: Mapped[Decimal] = mapped_column(MONEY, nullable=False)
     uom: Mapped[str] = mapped_column(String(16), nullable=False)
     unit_price: Mapped[Decimal] = mapped_column(MONEY, nullable=False)
-    # The rule the price came from, exactly as the quotation recorded it, so the order
-    # and the offer agree about why the price is what it is (T-3.SALES.06/07).
+    # The rule the price came from, and where it sat in the resolution order, exactly
+    # as the quotation recorded them, so the order and the offer agree about why the
+    # price is what it is (T-3.SALES.06/07).
     rule_code: Mapped[str | None] = mapped_column(String(80))
+    rule_priority: Mapped[int | None] = mapped_column(Integer)
     priced_on: Mapped[date] = mapped_column(Date, nullable=False)
     # Fulfilled so far (T-3.SALES.05): incremented by each shipment, so what an order
     # still owes is readable from the line alone — the same shape a purchase order
@@ -363,6 +365,7 @@ def convert_quotation_to_order(
                 uom=line.uom,
                 unit_price=line.unit_price,
                 rule_code=line.rule_code,
+                rule_priority=line.rule_priority,
                 priced_on=line.priced_on,
             )
         )

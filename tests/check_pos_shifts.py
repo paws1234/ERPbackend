@@ -20,8 +20,9 @@ Green on all eleven:
 7. the shift's totals are derived every time: sales, net, tax, gross, the tenders kept
    apart, the movements, the change paid — so they cannot drift from the sales
 8. the opening float is counted **once** — a float also recorded as a drawer movement is
-   not added a second time, and the day's **second shift on one till** does not wear the
-   first shift's movements
+   not added a second time, and a withdrawal that merely reads like a float still left
+   the drawer; the day's **second shift on one till** does not wear the first shift's
+   movements
 9. the policy itself is **readable over the API** — the stated answer comes back on the
    company profile the till reads, and withdrawing it reads back as unstated
 10. with no drawer policy, a basket opened on a shift and completed after it **closed**
@@ -325,6 +326,20 @@ def main() -> int:
             f"8. a shift opened with a 100.00 float and a 10.00 paid-out expects"
             f" {totals_three['expected_cash']} — the float is its own figure, not a"
             " movement added on top"
+        )
+
+        # 8c — a withdrawal described as a float still left the drawer
+        described = paid_out(session, company_id=COMPANY, terminal="T3", amount="5.00",
+                             reason="opening float", actor="maria", on=DAY)
+        session.commit()
+        after_withdrawal = shift_totals(session, third)
+        assert after_withdrawal["movements"] == Decimal("-15.000000"), after_withdrawal
+        assert after_withdrawal["expected_cash"] == Decimal("85.000000"), after_withdrawal
+        print(
+            f"8c. a 5.00 paid-out whose reason happens to read"
+            f" {described.reason!r} is still money that left the drawer"
+            f" ({after_withdrawal['expected_cash']} expected), because what is the"
+            " shift's own float is its kind and its reason, not the words alone"
         )
 
         # 8b — the day's second shift on one till does not wear the first's movements

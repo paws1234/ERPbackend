@@ -206,6 +206,17 @@
             "title": "Code",
             "type": "string"
           },
+          "credit_check_mode": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Credit Check Mode"
+          },
           "fiscal_year_start_month": {
             "title": "Fiscal Year Start Month",
             "type": "integer"
@@ -227,6 +238,114 @@
           "fiscal_year_start_month"
         ],
         "title": "CompanyOut",
+        "type": "object"
+      },
+      "ConfirmOrderIn": {
+        "description": "What confirming an order needs: the customer's exposure, and any acceptance.\n\nThe **exposure is stated by the caller** until T-3.AR.06 computes it across open\nAR \u2014 the path this task's own recorded stop chose. `acknowledge_breach` is the\nacknowledgement `warn` mode requires: an explicit act, so a breach is never\naccepted by the mere act of asking.",
+        "properties": {
+          "acknowledge_breach": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Acknowledge Breach"
+          },
+          "exposure": {
+            "title": "Exposure",
+            "type": "string"
+          }
+        },
+        "required": [
+          "exposure"
+        ],
+        "title": "ConfirmOrderIn",
+        "type": "object"
+      },
+      "CreditCheckModeIn": {
+        "description": "The policy a company is stating, or null to withdraw it (back to unstated).",
+        "properties": {
+          "mode": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mode"
+          }
+        },
+        "required": [
+          "mode"
+        ],
+        "title": "CreditCheckModeIn",
+        "type": "object"
+      },
+      "CreditDecisionOut": {
+        "description": "The order-time credit decision as it was recorded (T-3.SALES.04).\n\nEvery field is the value *at the moment of confirmation* \u2014 the mode then, the limit\nthen, the exposure then \u2014 which is why a later change to any of them leaves this\nanswer untouched.",
+        "properties": {
+          "acknowledged_by": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Acknowledged By"
+          },
+          "breached": {
+            "title": "Breached",
+            "type": "boolean"
+          },
+          "decided_at": {
+            "format": "date-time",
+            "title": "Decided At",
+            "type": "string"
+          },
+          "exposure": {
+            "title": "Exposure",
+            "type": "string"
+          },
+          "exposure_after": {
+            "title": "Exposure After",
+            "type": "string"
+          },
+          "limit": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Limit"
+          },
+          "mode": {
+            "title": "Mode",
+            "type": "string"
+          },
+          "order_value": {
+            "title": "Order Value",
+            "type": "string"
+          }
+        },
+        "required": [
+          "mode",
+          "exposure",
+          "order_value",
+          "exposure_after",
+          "breached",
+          "decided_at"
+        ],
+        "title": "CreditDecisionOut",
         "type": "object"
       },
       "CurrencyIn": {
@@ -800,6 +919,39 @@
       "OrderOut": {
         "description": "The order a quotation became, and the quotation it came from.",
         "properties": {
+          "confirmed_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Confirmed At"
+          },
+          "confirmed_by": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Confirmed By"
+          },
+          "credit_decision": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CreditDecisionOut"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "currency": {
             "anyOf": [
               {
@@ -842,6 +994,10 @@
             ],
             "title": "Quotation"
           },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
           "total": {
             "title": "Total",
             "type": "string"
@@ -852,7 +1008,8 @@
           "customer_code",
           "ordered_on",
           "lines",
-          "total"
+          "total",
+          "status"
         ],
         "title": "OrderOut",
         "type": "object"
@@ -2715,6 +2872,129 @@
           }
         },
         "summary": "Current Company",
+        "tags": [
+          "platform"
+        ]
+      }
+    },
+    "/api/v1/companies/current/credit-check-mode": {
+      "post": {
+        "description": "State, change or withdraw this company's credit-check policy.\n\nPlan \u00a78 leaves the mode undecided, so the body carries a value or an explicit null\nrather than relying on a default: \"not stated\" is a state a company may be in, and\nthe order-time check treats it as a refusal rather than as `off`.\n\nChanging the mode is forward-looking only \u2014 decisions already recorded keep the mode\nthey were taken under, because each one stored it.",
+        "operationId": "set_company_credit_check_mode_api_v1_companies_current_credit_check_mode_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "x-company-id",
+            "required": true,
+            "schema": {
+              "title": "X-Company-Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-actor",
+            "required": false,
+            "schema": {
+              "default": "unknown",
+              "title": "X-Actor",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreditCheckModeIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CompanyOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The request could not be understood"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The caller is not identified"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The caller may not do this"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The company, document or route does not exist"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The request clashes with one already made"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The request did not match the contract, or a domain rule refused it"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The platform failed unexpectedly"
+          }
+        },
+        "summary": "Set Company Credit Check Mode",
         "tags": [
           "platform"
         ]
@@ -5491,6 +5771,260 @@
         "summary": "Record Rfq Answer",
         "tags": [
           "procurement"
+        ]
+      }
+    },
+    "/api/v1/sales-orders/{number}": {
+      "get": {
+        "description": "One order with its lifecycle and the credit decision taken at confirmation.",
+        "operationId": "sales_order_api_v1_sales_orders__number__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "number",
+            "required": true,
+            "schema": {
+              "title": "Number",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-company-id",
+            "required": true,
+            "schema": {
+              "title": "X-Company-Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-actor",
+            "required": false,
+            "schema": {
+              "default": "unknown",
+              "title": "X-Actor",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OrderOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The request could not be understood"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The caller is not identified"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The caller may not do this"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The company, document or route does not exist"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The request clashes with one already made"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The request did not match the contract, or a domain rule refused it"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The platform failed unexpectedly"
+          }
+        },
+        "summary": "Sales Order",
+        "tags": [
+          "sales"
+        ]
+      }
+    },
+    "/api/v1/sales-orders/{number}/confirm": {
+      "post": {
+        "description": "Confirm an order, applying the company's credit-check mode as it is placed.\n\nThe exposure is **stated by the caller** until T-3.AR.06 computes it across open\nAR. The refusal a `block` breach produces is the point of the endpoint: it is the\none place an order stops being an intention.",
+        "operationId": "confirm_sales_order_api_v1_sales_orders__number__confirm_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "number",
+            "required": true,
+            "schema": {
+              "title": "Number",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-company-id",
+            "required": true,
+            "schema": {
+              "title": "X-Company-Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-actor",
+            "required": false,
+            "schema": {
+              "default": "unknown",
+              "title": "X-Actor",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ConfirmOrderIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OrderOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The request could not be understood"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The caller is not identified"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The caller may not do this"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The company, document or route does not exist"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The request clashes with one already made"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The request did not match the contract, or a domain rule refused it"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The platform failed unexpectedly"
+          }
+        },
+        "summary": "Confirm Sales Order",
+        "tags": [
+          "sales"
         ]
       }
     }

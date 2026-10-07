@@ -65,7 +65,15 @@ from sqlalchemy.orm import Mapped, Session, mapped_column
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app.audit import set_actor
-from app.company import Company, UnknownCompanyError, company_base_currency
+from app.company import (
+    CREDIT_CHECK_MODES,
+    Company,
+    UnknownCompanyError,
+    UnknownCreditCheckMode,
+    company_base_currency,
+    credit_check_mode_of,
+    set_credit_check_mode,
+)
 from app.db import Base, scope_to_company
 from app.ledger.accounts import (
     UnknownAccountError,
@@ -133,8 +141,14 @@ from app.sales.pipeline import (
     stage_by_name,
 )
 from app.sales.orders import (
+    BREACHED,
+    CONFIRMED,
+    CreditDecision,
     OrderError,
+    confirm_order,
     convert_quotation_to_order,
+    credit_decision_for,
+    order_by_number,
     order_total,
 )
 from app.sales.quotations import (
@@ -284,6 +298,15 @@ class CompanyOut(BaseModel):
     name: str
     base_currency: str
     fiscal_year_start_month: int
+    # T-3.SALES.04: the credit-check policy this company has stated, or null when it has
+    # stated none — which the order-time check treats differently from "off".
+    credit_check_mode: str | None = None
+
+
+class CreditCheckModeIn(BaseModel):
+    """The policy a company is stating, or null to withdraw it (back to unstated)."""
+
+    mode: str | None
 
 
 # --- T-1.ACCT.01 — the chart of accounts --------------------------------
@@ -640,6 +663,13 @@ async def _missing_mapping(_request: Request, exc: MissingMappingError) -> JSONR
 @app.exception_handler(UnknownCompanyError)
 async def _unknown_company(_request: Request, exc: UnknownCompanyError) -> JSONResponse:
     return _error(422, "unknown_company", str(exc))
+
+
+@app.exception_handler(UnknownCreditCheckMode)
+async def _unknown_credit_mode(
+    _request: Request, exc: UnknownCreditCheckMode
+) -> JSONResponse:
+    return _error(422, "unknown_credit_check_mode", str(exc))
 
 
 @app.exception_handler(UnknownCurrencyError)
@@ -1936,6 +1966,24 @@ class OrderLineIn(BaseModel):
     on: date | None = None
 
 
+class CreditDecisionOut(BaseModel):
+    """The order-time credit decision as it was recorded (T-3.SALES.04).
+
+    Every field is the value *at the moment of confirmation* — the mode then, the limit
+    then, the exposure then — which is why a later change to any of them leaves this
+    answer untouched.
+    """
+
+    mode: str
+    limit: str | None = None
+    exposure: str
+    order_value: str
+    exposure_after: str
+    breached: bool
+    acknowledged_by: str | None = None
+    decided_at: datetime
+
+
 class OrderLineOut(BaseModel):
     """One ordered line — the quotation's, carried across without re-keying."""
 
@@ -1959,6 +2007,27 @@ class OrderOut(BaseModel):
     ordered_on: date
     lines: list[OrderLineOut]
     total: str
+    # T-3.SALES.04: the lifecycle, and the credit decision taken at confirmation.
+    status: str
+    confirmed_at: datetime | None = None
+    confirmed_by: str | None = None
+    credit_decision: CreditDecisionOut | None = None
+
+
+class ConfirmOrderIn(BaseModel):
+    """What confirming an order needs: the customer's exposure, and any acceptance.
+
+    The **exposure is stated by the caller** until T-3.AR.06 computes it across open
+    AR — the path this task's own recorded stop chose. `acknowledge_breach` is the
+    acknowledgement `warn` mode requires: an explicit act, so a breach is never
+    accepted by the mere act of asking.
+    """
+
+    exposure: str
+    # Nullable rather than merely defaulted: T-0.API.01's convention is that an
+    # optional field says so in the contract, so "not acknowledged" is an explicit null
+    # and not an implicit absence. Only `true` acknowledges.
+    acknowledge_breach: bool | None = None
 
 
 def _quotation_out(session: Session, quotation) -> QuotationOut:
@@ -1992,6 +2061,22 @@ def _quotation_out(session: Session, quotation) -> QuotationOut:
     )
 
 
+def _credit_decision_out(decision: CreditDecision | None) -> CreditDecisionOut | None:
+    """One recorded decision as the API states it, or nothing while the order is a draft."""
+    if decision is None:
+        return None
+    return CreditDecisionOut(
+        mode=decision.mode,
+        limit=None if decision.limit_amount is None else _money(decision.limit_amount),
+        exposure=_money(decision.exposure),
+        order_value=_money(decision.order_value),
+        exposure_after=_money(decision.exposure + decision.order_value),
+        breached=decision.outcome == BREACHED,
+        acknowledged_by=decision.acknowledged_by,
+        decided_at=decision.decided_at,
+    )
+
+
 def _order_out(session: Session, order) -> OrderOut:
     """One order as the API states it, with the quotation it came from named."""
     lines = list(order.lines)
@@ -2003,6 +2088,10 @@ def _order_out(session: Session, order) -> OrderOut:
         ),
         currency=order.currency,
         ordered_on=order.ordered_on,
+        status=order.status,
+        confirmed_at=order.confirmed_at,
+        confirmed_by=order.confirmed_by,
+        credit_decision=_credit_decision_out(credit_decision_for(session, order)),
         lines=[
             OrderLineOut(
                 line_no=line.line_no,
@@ -2159,3 +2248,106 @@ def order_from_quotation(
     response = _order_out(session, order)
     session.commit()
     return response
+
+
+# --- T-3.SALES.04: the order's lifecycle and its order-time credit decision ----
+# T-3.SALES.03 could raise an order but not confirm one. These are the paths that
+# make confirmation what it is: the company states a credit-check policy, confirming
+# applies it, and the decision is written down with the limit, the exposure and the
+# order value that produced it, so a later change to any of them cannot restate it.
+
+
+@app.post(
+    f"{BASE}/companies/current/credit-check-mode",
+    response_model=CompanyOut,
+    tags=["platform"],
+)
+def set_company_credit_check_mode(
+    payload: CreditCheckModeIn, context: Context
+) -> CompanyOut:
+    """State, change or withdraw this company's credit-check policy.
+
+    Plan §8 leaves the mode undecided, so the body carries a value or an explicit null
+    rather than relying on a default: "not stated" is a state a company may be in, and
+    the order-time check treats it as a refusal rather than as `off`.
+
+    Changing the mode is forward-looking only — decisions already recorded keep the mode
+    they were taken under, because each one stored it.
+    """
+    session = context.session
+    require(
+        session,
+        company_id=context.company_id,
+        subject=context.actor,
+        capability="company.configure",
+        entity="company",
+        entity_id=context.company_id,
+    )
+    company = session.get(Company, context.company_id)
+    if company is None:
+        raise ApiError(404, "company_not_found", f"no company {context.company_id}")
+    set_credit_check_mode(session, company, mode=payload.mode)
+    response = CompanyOut(
+        id=str(company.id),
+        code=company.code,
+        name=company.name,
+        base_currency=company.base_currency,
+        fiscal_year_start_month=company.fiscal_year_start_month,
+        credit_check_mode=company.credit_check_mode,
+    )
+    session.commit()
+    return response
+
+
+@app.get(
+    f"{BASE}/sales-orders/{{number}}", response_model=OrderOut, tags=["sales"]
+)
+def sales_order(number: str, context: Context) -> OrderOut:
+    """One order with its lifecycle and the credit decision taken at confirmation."""
+    session = context.session
+    require(
+        session,
+        company_id=context.company_id,
+        subject=context.actor,
+        capability="order.read",
+        entity="sales_order",
+    )
+    order = order_by_number(session, company_id=context.company_id, number=number)
+    return _order_out(session, order)
+
+
+@app.post(
+    f"{BASE}/sales-orders/{{number}}/confirm",
+    response_model=OrderOut,
+    tags=["sales"],
+)
+def confirm_sales_order(
+    number: str, payload: ConfirmOrderIn, context: Context
+) -> OrderOut:
+    """Confirm an order, applying the company's credit-check mode as it is placed.
+
+    The exposure is **stated by the caller** until T-3.AR.06 computes it across open
+    AR. The refusal a `block` breach produces is the point of the endpoint: it is the
+    one place an order stops being an intention.
+    """
+    session = context.session
+    require(
+        session,
+        company_id=context.company_id,
+        subject=context.actor,
+        capability="order.write",
+        entity="sales_order",
+    )
+    order = order_by_number(session, company_id=context.company_id, number=number)
+    confirm_order(
+        session,
+        order,
+        exposure=payload.exposure,
+        actor=context.actor,
+        acknowledge_breach=payload.acknowledge_breach is True,
+    )
+    response = _order_out(session, order)
+    session.commit()
+    return response
+
+

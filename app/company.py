@@ -24,8 +24,19 @@ COSTING_METHODS = ("fifo", "moving_average", "standard_cost")
 DEFAULT_COSTING_METHOD = "moving_average"
 
 
+# The credit-check policies a company may state, applied when a sales order is
+# confirmed (T-3.SALES.04). Plan §8 lists the credit-check mode among what is **still
+# undecided**, so the column has no default and `None` — unstated — is a real state,
+# not a synonym for `off`.
+CREDIT_CHECK_MODES = ("off", "warn", "block")
+
+
 class UnknownCompanyError(ValueError):
     """A posting or lookup named a company that does not exist."""
+
+
+class UnknownCreditCheckMode(ValueError):
+    """A credit-check mode that is not one of the three the plan names."""
 
 
 class Company(SoftDeleteMixin, Base):
@@ -47,6 +58,12 @@ class Company(SoftDeleteMixin, Base):
             + ", ".join(f"'{method}'" for method in COSTING_METHODS)
             + ")",
             name="ck_company_costing_method",
+        ),
+        CheckConstraint(
+            "credit_check_mode IS NULL OR credit_check_mode IN ("
+            + ", ".join(f"'{mode}'" for mode in CREDIT_CHECK_MODES)
+            + ")",
+            name="ck_company_credit_check_mode",
         ),
     )
 
@@ -70,6 +87,14 @@ class Company(SoftDeleteMixin, Base):
     costing_method: Mapped[str] = mapped_column(
         String(16), nullable=False, default=DEFAULT_COSTING_METHOD
     )
+    # What this company does when a confirmed sales order breaches the customer's
+    # credit limit (T-3.SALES.04). **No default, on purpose**: plan §8 leaves the
+    # credit-check mode undecided, so a company states its own policy rather than
+    # inheriting an invented one — the same reasoning as `fiscal_year_start_month`
+    # above. `None` is *unstated*, which is not `off`: `off` is the policy "check
+    # nothing", while unstated means no policy has been agreed, and the order-time
+    # check refuses until one is.
+    credit_check_mode: Mapped[str | None] = mapped_column(String(8))
 
 
 # Part of the master convention (T-0.AUDIT.01), registered here because this
@@ -88,3 +113,38 @@ def company_base_currency(session, *, company_id: uuid.UUID) -> str:
     if company is None:
         raise UnknownCompanyError(f"no company {company_id}")
     return company.base_currency
+
+
+def credit_check_mode_of(session, *, company_id: uuid.UUID) -> str | None:
+    """This company's credit-check mode, or ``None`` when it has stated none.
+
+    Returns the stored mode rather than a default, because there is no default to
+    return: the caller has to decide what "unstated" means for it (T-3.SALES.04
+    refuses the confirmation rather than inventing a policy).
+    """
+    company = session.get(Company, company_id)
+    if company is None:
+        raise UnknownCompanyError(f"no company {company_id}")
+    return company.credit_check_mode
+
+
+def set_credit_check_mode(session, company: Company, *, mode: str | None) -> Company:
+    """State, change or withdraw this company's credit-check mode.
+
+    Withdrawing with ``None`` returns the company to *unstated*, which the order-time
+    check treats differently from ``off``. Changing the mode never restates a decision
+    already taken: each decision recorded its own mode (T-3.SALES.04).
+    """
+    if mode is None:
+        company.credit_check_mode = None
+        session.flush()
+        return company
+    wanted = str(mode).strip().lower()
+    if wanted not in CREDIT_CHECK_MODES:
+        raise UnknownCreditCheckMode(
+            f"{mode!r} is not a credit-check mode; state one of"
+            f" {', '.join(CREDIT_CHECK_MODES)}, or null for no policy agreed"
+        )
+    company.credit_check_mode = wanted
+    session.flush()
+    return company

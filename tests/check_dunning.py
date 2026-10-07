@@ -24,6 +24,9 @@ Green on all eight:
    overlap, a level starting before day 0, two open ends and a closed last level are
    each refused, and an unknown channel with them
 
+8b. a schedule whose first level starts **after** day zero leaves a younger overdue
+   invoice alone — as `not_due` in the run, not an abort
+
 **Scratch database only**: it drops and recreates the public schema.
 """
 
@@ -43,9 +46,11 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from app.ar.dunning import (  # noqa: E402
     DunningError,
+    DunningLevel,
     DunningReminder,
     checked_levels,
     define_level,
+    level_for,
     levels,
     reminders_for,
     run_dunning,
@@ -350,6 +355,36 @@ def main() -> int:
             f"3b. a refused send is on the delivery log as failed with its last error"
             f" ({refused_log[0].last_error}) and on the reminder"
             f" ({row.failure})"
+        )
+
+        # 8b — an invoice below the schedule's first rung is left alone, not fatal
+        late_span = session.scalars(
+            select(DunningLevel).where(
+                DunningLevel.company_id == COMPANY, DunningLevel.code == "SOFT"
+            )
+        ).one()
+        late_span.from_days = 30
+        session.commit()
+        assert level_for(session, company_id=COMPANY, days=10) is None, (
+            "an invoice below the schedule's first rung was given a level"
+        )
+        assert level_for(session, company_id=COMPANY, days=45).code == "FINAL", (
+            level_for(session, company_id=COMPANY, days=45)
+        )
+        # The schedule is allowed to start at 30 days; AR-EARLY is 10 days late at the
+        # run's date, so the run has to leave it alone rather than abort on it.
+        run_late_start = run_dunning(
+            session, company_id=COMPANY, as_of=as_of, run_key="starts-at-30"
+        )
+        session.commit()
+        assert "AR-EARLY" in run_late_start.not_due, run_late_start.not_due
+        assert all(
+            row.days_past_due >= 30 for row in run_late_start.reminders
+        ), run_late_start.reminders
+        print(
+            "8b. a schedule that starts at 30 days leaves the 10-day-late AR-EARLY alone"
+            f" ({run_late_start.not_due}) instead of aborting the run, and day 45 is the"
+            " final level"
         )
 
     print("\ncheck_dunning: all assertions green")

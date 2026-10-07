@@ -279,10 +279,10 @@ def level_for(
     for row in schedule:
         if reached >= row.from_days and (row.to_days is None or reached <= row.to_days):
             return row
-    raise DunningError(  # pragma: no cover - the partition is checked above
-        f"no dunning level covers day {days}; the schedule is validated, so this"
-        " cannot happen"
-    )
+    # Below the schedule's first level. A company that starts reminding at 30 days
+    # leaves a 10-day-late invoice alone — and the schedule is allowed to start there —
+    # so falling out of the loop is an answer, not an impossible state.
+    return None
 
 
 class DunningRun:

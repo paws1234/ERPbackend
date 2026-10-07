@@ -151,6 +151,17 @@ from app.sales.orders import (
     order_by_number,
     order_total,
 )
+from app.sales.fulfilment import (
+    FulfilmentError,
+    Shipment,
+    generate_pick_list,
+    pick_list_for,
+    pick_lines,
+    record_picked,
+    remaining_quantity,
+    ship_order,
+    shipments_for,
+)
 from app.sales.quotations import (
     QuotationError,
     add_line,
@@ -161,6 +172,8 @@ from app.sales.quotations import (
     quotation_by_number,
     reprice_quotation,
 )
+from app.stock.items import Item
+from app.stock.locations import LocationError, location_by_code
 from app.security import (
     AccessDenied,
     hidden_fields,
@@ -714,6 +727,16 @@ async def _quotation_error(_request: Request, exc: QuotationError) -> JSONRespon
 @app.exception_handler(OrderError)
 async def _order_error(_request: Request, exc: OrderError) -> JSONResponse:
     return _error(422, "order_error", str(exc))
+
+
+@app.exception_handler(FulfilmentError)
+async def _fulfilment_error(_request: Request, exc: FulfilmentError) -> JSONResponse:
+    return _error(422, "fulfilment_error", str(exc))
+
+
+@app.exception_handler(LocationError)
+async def _location_error(_request: Request, exc: LocationError) -> JSONResponse:
+    return _error(422, "location_error", str(exc))
 
 
 @app.exception_handler(IncompleteSourceError)
@@ -1995,6 +2018,71 @@ class OrderLineOut(BaseModel):
     rule_code: str | None = None
     priced_on: date
     amount: str
+    # T-3.SALES.05: what has left, and what the order still owes on this line.
+    shipped: str
+    remaining: str
+
+
+class PickListLineOut(BaseModel):
+    """One line of the picker's paper: what the order asks, and what was picked."""
+
+    line_no: int
+    item_sku: str | None = None
+    quantity: str
+    uom: str
+    picked_quantity: str
+
+
+class PickListOut(BaseModel):
+    number: str
+    created_on: date
+    lines: list[PickListLineOut]
+
+
+class PickListIn(BaseModel):
+    number: str
+    on: date | None = None
+
+
+class PickedQuantityIn(BaseModel):
+    """How much of one pick-list line was picked."""
+
+    quantity: str
+
+
+class ShipmentLineOut(BaseModel):
+    """One line as it left, and the stock movement that carried it out."""
+
+    line_no: int
+    quantity: str
+    uom: str
+    movement: str | None = None
+
+
+class ShipmentOut(BaseModel):
+    number: str
+    warehouse: str
+    shipped_on: date
+    lines: list[ShipmentLineOut]
+
+
+class ShipmentLineIn(BaseModel):
+    line_no: int
+    quantity: str
+
+
+class ShipmentIn(BaseModel):
+    """What a shipment needs: where from, and how much of which lines.
+
+    The lines come with the header because a shipment with nothing on it moves no
+    stock — the boundary refuses an empty list rather than storing a document that
+    describes nothing.
+    """
+
+    number: str
+    warehouse: str
+    on: date | None = None
+    lines: Annotated[list[ShipmentLineIn], Field(min_length=1)]
 
 
 class OrderOut(BaseModel):
@@ -2012,6 +2100,9 @@ class OrderOut(BaseModel):
     confirmed_at: datetime | None = None
     confirmed_by: str | None = None
     credit_decision: CreditDecisionOut | None = None
+    # T-3.SALES.05: what fulfilment had to say — the picker's paper, and what shipped.
+    pick_list: PickListOut | None = None
+    shipments: list[ShipmentOut]
 
 
 class ConfirmOrderIn(BaseModel):
@@ -2077,6 +2168,48 @@ def _credit_decision_out(decision: CreditDecision | None) -> CreditDecisionOut |
     )
 
 
+def _pick_list_out(session: Session, pick_list) -> PickListOut | None:
+    """The picker's paper as the API states it, or nothing when none was drawn."""
+    if pick_list is None:
+        return None
+    return PickListOut(
+        number=pick_list.number,
+        created_on=pick_list.created_on,
+        lines=[
+            PickListLineOut(
+                line_no=line.line_no,
+                item_sku=(
+                    None
+                    if line.item_id is None
+                    else session.get(Item, line.item_id).sku
+                ),
+                quantity=_money(line.quantity),
+                uom=line.uom,
+                picked_quantity=_money(line.picked_quantity),
+            )
+            for line in pick_lines(session, pick_list)
+        ],
+    )
+
+
+def _shipment_out(shipment: Shipment) -> ShipmentOut:
+    """One shipment as the API states it, each line pointing at its own movement."""
+    return ShipmentOut(
+        number=shipment.number,
+        warehouse=shipment.location.code,
+        shipped_on=shipment.shipped_on,
+        lines=[
+            ShipmentLineOut(
+                line_no=line.line_no,
+                quantity=_money(line.quantity),
+                uom=line.uom,
+                movement=None if line.movement_id is None else str(line.movement_id),
+            )
+            for line in shipment.lines
+        ],
+    )
+
+
 def _order_out(session: Session, order) -> OrderOut:
     """One order as the API states it, with the quotation it came from named."""
     lines = list(order.lines)
@@ -2092,6 +2225,11 @@ def _order_out(session: Session, order) -> OrderOut:
         confirmed_at=order.confirmed_at,
         confirmed_by=order.confirmed_by,
         credit_decision=_credit_decision_out(credit_decision_for(session, order)),
+        pick_list=_pick_list_out(session, pick_list_for(session, order)),
+        shipments=[
+            _shipment_out(shipment)
+            for shipment in shipments_for(session, order)
+        ],
         lines=[
             OrderLineOut(
                 line_no=line.line_no,
@@ -2102,6 +2240,8 @@ def _order_out(session: Session, order) -> OrderOut:
                 rule_code=line.rule_code,
                 priced_on=line.priced_on,
                 amount=_money(line.quantity * line.unit_price),
+                shipped=_money(line.shipped_quantity),
+                remaining=_money(remaining_quantity(line)),
             )
             for line in lines
         ],
@@ -2345,6 +2485,107 @@ def confirm_sales_order(
         exposure=payload.exposure,
         actor=context.actor,
         acknowledge_breach=payload.acknowledge_breach is True,
+    )
+    response = _order_out(session, order)
+    session.commit()
+    return response
+
+
+# --- T-3.SALES.05: pick lists, shipping, and the stock they move ---------------
+# Confirming an order promises nothing physically. These paths are the other half:
+# a pick list drawn from the confirmed lines, what was picked off the shelf, and the
+# shipment that issues stock out of a warehouse — through T-1.INV.05's `issue`, so the
+# valuation, the no-negative-stock rule and the GL posting are the shared ones.
+
+
+@app.post(
+    f"{BASE}/sales-orders/{{number}}/pick-list",
+    response_model=OrderOut,
+    status_code=201,
+    tags=["sales"],
+)
+def create_order_pick_list(
+    number: str, payload: PickListIn, context: Context
+) -> OrderOut:
+    """Draw the pick list for a confirmed order — exactly its lines, once."""
+    session = context.session
+    require(
+        session,
+        company_id=context.company_id,
+        subject=context.actor,
+        capability="order.write",
+        entity="sales_order",
+    )
+    order = order_by_number(session, company_id=context.company_id, number=number)
+    generate_pick_list(session, order, number=payload.number, on=payload.on)
+    response = _order_out(session, order)
+    session.commit()
+    return response
+
+
+@app.post(
+    f"{BASE}/sales-orders/{{number}}/pick-list/lines/{{line_no}}",
+    response_model=OrderOut,
+    tags=["sales"],
+)
+def record_order_pick(
+    number: str, line_no: int, payload: PickedQuantityIn, context: Context
+) -> OrderOut:
+    """Record how much of one pick-list line was picked."""
+    session = context.session
+    require(
+        session,
+        company_id=context.company_id,
+        subject=context.actor,
+        capability="order.write",
+        entity="sales_order",
+    )
+    order = order_by_number(session, company_id=context.company_id, number=number)
+    listed = pick_list_for(session, order)
+    if listed is None:
+        raise ApiError(
+            404,
+            "no_pick_list",
+            f"sales order {order.number!r} has no pick list to record against",
+        )
+    record_picked(session, listed, line_no=line_no, quantity=payload.quantity)
+    response = _order_out(session, order)
+    session.commit()
+    return response
+
+
+@app.post(
+    f"{BASE}/sales-orders/{{number}}/shipments",
+    response_model=OrderOut,
+    status_code=201,
+    tags=["sales"],
+)
+def ship_sales_order(number: str, payload: ShipmentIn, context: Context) -> OrderOut:
+    """Ship named lines of a confirmed order, issuing stock out of one warehouse.
+
+    The refusal a second shipment for the same quantity produces is the point: what an
+    order still owes is read from the line, and shipping more is refused rather than
+    silently clamped.
+    """
+    session = context.session
+    require(
+        session,
+        company_id=context.company_id,
+        subject=context.actor,
+        capability="order.write",
+        entity="sales_order",
+    )
+    order = order_by_number(session, company_id=context.company_id, number=number)
+    warehouse = location_by_code(
+        session, company_id=context.company_id, code=payload.warehouse
+    )
+    ship_order(
+        session,
+        order,
+        number=payload.number,
+        warehouse=warehouse,
+        lines=[(line.line_no, line.quantity) for line in payload.lines],
+        on=payload.on,
     )
     response = _order_out(session, order)
     session.commit()

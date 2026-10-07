@@ -182,6 +182,9 @@ class SalesOrderLine(Base):
         CheckConstraint("line_no >= 1", name="ck_sales_order_line_starts_at_one"),
         CheckConstraint("quantity > 0", name="ck_sales_order_line_quantity"),
         CheckConstraint("unit_price >= 0", name="ck_sales_order_line_price"),
+        CheckConstraint(
+            "shipped_quantity >= 0", name="ck_sales_order_line_shipped"
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
@@ -201,6 +204,12 @@ class SalesOrderLine(Base):
     # and the offer agree about why the price is what it is (T-3.SALES.06/07).
     rule_code: Mapped[str | None] = mapped_column(String(80))
     priced_on: Mapped[date] = mapped_column(Date, nullable=False)
+    # Fulfilled so far (T-3.SALES.05): incremented by each shipment, so what an order
+    # still owes is readable from the line alone — the same shape a purchase order
+    # line's `received_quantity` uses for the buying side.
+    shipped_quantity: Mapped[Decimal] = mapped_column(
+        MONEY, nullable=False, default=Decimal(0)
+    )
 
     order: Mapped[SalesOrder] = relationship(back_populates="lines")
 

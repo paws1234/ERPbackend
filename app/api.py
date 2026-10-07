@@ -193,6 +193,8 @@ from app.ar.invoices import InvoiceError
 from app.ar.reconciliation import ReconciliationError as ArReconciliationError
 from app.ar.recurring import RecurringError
 from app.sales.tax import TaxError
+from app.pos.drawer import DrawerError
+from app.pos.drawer import record_movement
 from app.pos.sales import (
     PosError,
     complete_sale,
@@ -782,6 +784,11 @@ async def _fulfilment_error(_request: Request, exc: FulfilmentError) -> JSONResp
 @app.exception_handler(PosError)
 async def _pos_error(_request: Request, exc: PosError) -> JSONResponse:
     return _error(422, "pos_error", str(exc))
+
+
+@app.exception_handler(DrawerError)
+async def _drawer_error(_request: Request, exc: DrawerError) -> JSONResponse:
+    return _error(422, "drawer_error", str(exc))
 
 
 @app.exception_handler(InvoiceError)
@@ -3083,6 +3090,26 @@ class PosReceiptOut(BaseModel):
     receipt: dict
 
 
+class DrawerMovementIn(BaseModel):
+    """One note in or out of the drawer, with the reason it moved."""
+
+    terminal: str = Field(min_length=1, max_length=32)
+    movement_type: str
+    amount: str
+    reason: str = Field(min_length=1, max_length=200)
+    on: date | None = None
+
+
+class DrawerMovementOut(BaseModel):
+    id: str
+    terminal: str
+    movement_type: str
+    amount: str
+    reason: str
+    moved_on: date
+    actor: str
+
+
 def _pos_sale_out(sale) -> PosSaleOut:
     return PosSaleOut(
         number=sale.number,
@@ -3223,6 +3250,34 @@ def void_pos_sale(number: str, payload: PosVoidIn, context: Context) -> PosSaleO
     sale = pos_sale_by_number(session, company_id=context.company_id, number=number)
     void_sale(session, sale, reason=payload.reason, actor=context.actor)
     response = _pos_sale_out(sale)
+    session.commit()
+    return response
+
+
+@app.post(f"{BASE}/pos/drawer-movements", response_model=DrawerMovementOut,
+          status_code=201, tags=["pos"])
+def record_drawer_movement(
+    payload: DrawerMovementIn, context: Context
+) -> DrawerMovementOut:
+    """Record cash in or out of the drawer outside a sale, with its reason."""
+    session = context.session
+    require(session, company_id=context.company_id, subject=context.actor,
+            capability="pos.drawer", entity="pos_drawer_movement")
+    row = record_movement(
+        session,
+        company_id=context.company_id,
+        terminal=payload.terminal,
+        movement_type=payload.movement_type,
+        amount=payload.amount,
+        reason=payload.reason,
+        actor=context.actor,
+        moved_on=payload.on,
+    )
+    response = DrawerMovementOut(
+        id=str(row.id), terminal=row.terminal, movement_type=row.movement_type,
+        amount=_money(row.amount), reason=row.reason, moved_on=row.moved_on,
+        actor=row.actor,
+    )
     session.commit()
     return response
 

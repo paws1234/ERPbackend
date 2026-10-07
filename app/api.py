@@ -140,6 +140,12 @@ from app.sales.pipeline import (
     opportunity_by_id,
     stage_by_name,
 )
+from app.sales.campaigns import (
+    CouponError,
+    coupon_by_code,
+    define_coupon,
+    redeem_coupon,
+)
 from app.sales.pricing import (
     PricingError,
     define_rule,
@@ -732,6 +738,11 @@ async def _quotation_error(_request: Request, exc: QuotationError) -> JSONRespon
 @app.exception_handler(OrderError)
 async def _order_error(_request: Request, exc: OrderError) -> JSONResponse:
     return _error(422, "order_error", str(exc))
+
+
+@app.exception_handler(CouponError)
+async def _coupon_error(_request: Request, exc: CouponError) -> JSONResponse:
+    return _error(422, "coupon_error", str(exc))
 
 
 @app.exception_handler(ItemError)
@@ -2777,3 +2788,141 @@ def resolve_price_rule(payload: PriceQueryIn, context: Context) -> PriceDecision
     )
 
 
+# --- T-3.SALES.07: campaigns and coupons — scoped codes with a life --------------
+# The engine resolves rules over item, tier, volume **and campaign**; a coupon is a
+# code that adds a discount on top, inside its own window, up to its own usage limit,
+# and within the strictest stacking allowance on the document it is used on. Its use
+# is recorded against that document, which is what stops it being spent forever.
+
+
+class CouponIn(BaseModel):
+    """A coupon as it is filed: its campaign, its discount and its own limits.
+
+    Every limit is stated here rather than defaulted, because the plan states none of
+    them: an omitted window is *always open* and an omitted usage limit is *no limit*,
+    which are different answers from "closed today" and "unusable".
+    """
+
+    code: str
+    name: str
+    campaign: str
+    discount_type: str
+    discount_value: str
+    stacking_allowance: int
+    valid_from: date | None = None
+    valid_until: date | None = None
+    max_redemptions: int | None = None
+
+
+class CouponOut(BaseModel):
+    code: str
+    name: str
+    campaign: str
+    discount_type: str
+    discount_value: str
+    valid_from: date | None = None
+    valid_until: date | None = None
+    max_redemptions: int | None = None
+    stacking_allowance: int
+
+
+class CouponRedeemIn(BaseModel):
+    """Which document is using the coupon, and what the price is before it applies."""
+
+    document_type: str
+    document_id: str
+    base_price: str
+    on: date | None = None
+
+
+class CouponRedemptionOut(BaseModel):
+    code: str
+    campaign: str
+    document_type: str
+    document_id: str
+    discount_amount: str
+
+
+def _coupon_out(coupon) -> CouponOut:
+    return CouponOut(
+        code=coupon.code,
+        name=coupon.name,
+        campaign=coupon.campaign,
+        discount_type=coupon.discount_type,
+        discount_value=_money(coupon.discount_value),
+        valid_from=coupon.valid_from,
+        valid_until=coupon.valid_until,
+        max_redemptions=coupon.max_redemptions,
+        stacking_allowance=coupon.stacking_allowance,
+    )
+
+
+@app.post(
+    f"{BASE}/coupons", response_model=CouponOut, status_code=201, tags=["sales"]
+)
+def create_coupon(payload: CouponIn, context: Context) -> CouponOut:
+    """File one coupon."""
+    session = context.session
+    require(
+        session,
+        company_id=context.company_id,
+        subject=context.actor,
+        capability="pricing.configure",
+        entity="coupon",
+    )
+    coupon = define_coupon(
+        session,
+        company_id=context.company_id,
+        code=payload.code,
+        name=payload.name,
+        campaign=payload.campaign,
+        discount_type=payload.discount_type,
+        discount_value=payload.discount_value,
+        stacking_allowance=payload.stacking_allowance,
+        valid_from=payload.valid_from,
+        valid_until=payload.valid_until,
+        max_redemptions=payload.max_redemptions,
+    )
+    response = _coupon_out(coupon)
+    session.commit()
+    return response
+
+
+@app.post(
+    f"{BASE}/coupons/{{code}}/redeem",
+    response_model=CouponRedemptionOut,
+    tags=["sales"],
+)
+def redeem(payload: CouponRedeemIn, code: str, context: Context) -> CouponRedemptionOut:
+    """Use a coupon on a document, recording the use against that document.
+
+    The refusals are the point: an unknown code, one outside its window, one used to
+    its limit and one stacked past the allowance each answer with the reason, and none
+    of them writes a redemption.
+    """
+    session = context.session
+    require(
+        session,
+        company_id=context.company_id,
+        subject=context.actor,
+        capability="order.write",
+        entity="coupon",
+    )
+    coupon = coupon_by_code(session, company_id=context.company_id, code=code)
+    row = redeem_coupon(
+        session,
+        coupon,
+        document_type=payload.document_type,
+        document_id=_document_id(payload.document_id),
+        base_price=payload.base_price,
+        on=payload.on,
+    )
+    response = CouponRedemptionOut(
+        code=coupon.code,
+        campaign=coupon.campaign,
+        document_type=row.document_type,
+        document_id=str(row.document_id),
+        discount_amount=_money(row.discount_amount),
+    )
+    session.commit()
+    return response

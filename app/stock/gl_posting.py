@@ -43,6 +43,12 @@ SOURCE_ACCOUNT_KEYS = {
     "stock_issue": "stock_issue",
     "stock_transfer": "inventory",
     "inventory_adjustment": "stock_adjustment",
+    # A till's issue is a sale, so its counterpart is the same cost-of-sales account a
+    # fulfilment issue posts to (T-3.SALES.05) — the document differs, the cost does not.
+    "pos_sale": "stock_issue",
+    # A till's refund puts the goods back, so it reverses through the same account
+    # (T-3.POS.04): the credit that took the cost out is debited back.
+    "pos_sale_refund": "stock_issue",
 }
 
 MONEY_SCALE = Decimal("0.000001")

@@ -72,6 +72,7 @@ from app.company import (
     UnknownCreditCheckMode,
     company_base_currency,
     credit_check_mode_of,
+    set_cash_drawer_required,
     set_credit_check_mode,
 )
 from app.db import Base, scope_to_company
@@ -185,6 +186,36 @@ from app.sales.quotations import (
 )
 from app.stock.items import Item, ItemError, item_by_sku
 from app.stock.locations import LocationError, location_by_code
+from app.ar.aging import AgingError
+from app.ar.dunning import DunningError
+from app.ar.exposure import ExposureError
+from app.ar.gateway import GatewayError
+from app.ar.invoices import InvoiceError
+from app.ar.reconciliation import ReconciliationError as ArReconciliationError
+from app.ar.recurring import RecurringError
+from app.sales.tax import TaxError
+from app.pos.drawer import DrawerError
+from app.pos.drawer import record_movement
+from app.pos.reconciliation import reconcile as reconcile_pos
+from app.pos.reports import ReportError, day_report, shift_report, void_sale
+from app.pos.sales import (
+    PosError,
+    complete_sale,
+    open_sale,
+    receipt as receipt_rows,
+    sale_by_number as pos_sale_by_number,
+    sale_change,
+    sale_tendered,
+    scan,
+    tender,
+)
+from app.pos.shifts import (
+    ShiftError,
+    close_shift,
+    current_shift,
+    open_shift,
+    PosShift,
+)
 from app.security import (
     AccessDenied,
     hidden_fields,
@@ -325,6 +356,9 @@ class CompanyOut(BaseModel):
     # T-3.SALES.04: the credit-check policy this company has stated, or null when it has
     # stated none — which the order-time check treats differently from "off".
     credit_check_mode: str | None = None
+    # T-3.POS.03: whether this company's tills must trade inside an open shift. Null is
+    # "not stated", which reads as "no drawer management" — the ordinary shop.
+    cash_drawer_required: bool | None = None
 
 
 class CreditCheckModeIn(BaseModel):
@@ -760,6 +794,68 @@ async def _fulfilment_error(_request: Request, exc: FulfilmentError) -> JSONResp
     return _error(422, "fulfilment_error", str(exc))
 
 
+@app.exception_handler(PosError)
+async def _pos_error(_request: Request, exc: PosError) -> JSONResponse:
+    return _error(422, "pos_error", str(exc))
+
+
+@app.exception_handler(DrawerError)
+async def _drawer_error(_request: Request, exc: DrawerError) -> JSONResponse:
+    return _error(422, "drawer_error", str(exc))
+
+
+@app.exception_handler(ShiftError)
+async def _shift_error(_request: Request, exc: ShiftError) -> JSONResponse:
+    return _error(422, "shift_error", str(exc))
+
+
+@app.exception_handler(ReportError)
+async def _report_error(_request: Request, exc: ReportError) -> JSONResponse:
+    return _error(422, "report_error", str(exc))
+
+
+@app.exception_handler(InvoiceError)
+async def _invoice_error(_request: Request, exc: InvoiceError) -> JSONResponse:
+    return _error(422, "invoice_error", str(exc))
+
+
+@app.exception_handler(GatewayError)
+async def _gateway_error(_request: Request, exc: GatewayError) -> JSONResponse:
+    return _error(422, "gateway_error", str(exc))
+
+
+@app.exception_handler(TaxError)
+async def _tax_error(_request: Request, exc: TaxError) -> JSONResponse:
+    return _error(422, "tax_error", str(exc))
+
+
+@app.exception_handler(AgingError)
+async def _aging_error(_request: Request, exc: AgingError) -> JSONResponse:
+    return _error(422, "aging_error", str(exc))
+
+
+@app.exception_handler(ExposureError)
+async def _exposure_error(_request: Request, exc: ExposureError) -> JSONResponse:
+    return _error(422, "exposure_error", str(exc))
+
+
+@app.exception_handler(DunningError)
+async def _dunning_error(_request: Request, exc: DunningError) -> JSONResponse:
+    return _error(422, "dunning_error", str(exc))
+
+
+@app.exception_handler(RecurringError)
+async def _recurring_error(_request: Request, exc: RecurringError) -> JSONResponse:
+    return _error(422, "recurring_error", str(exc))
+
+
+@app.exception_handler(ArReconciliationError)
+async def _ar_reconciliation_error(
+    _request: Request, exc: ArReconciliationError
+) -> JSONResponse:
+    return _error(422, "reconciliation_error", str(exc))
+
+
 @app.exception_handler(LocationError)
 async def _location_error(_request: Request, exc: LocationError) -> JSONResponse:
     return _error(422, "location_error", str(exc))
@@ -803,6 +899,8 @@ def current_company(context: Context) -> CompanyOut:
         name=company.name,
         base_currency=company.base_currency,
         fiscal_year_start_month=company.fiscal_year_start_month,
+        credit_check_mode=company.credit_check_mode,
+        cash_drawer_required=company.cash_drawer_required,
     )
 
 
@@ -2139,13 +2237,18 @@ class OrderOut(BaseModel):
 class ConfirmOrderIn(BaseModel):
     """What confirming an order needs: the customer's exposure, and any acceptance.
 
-    The **exposure is stated by the caller** until T-3.AR.06 computes it across open
-    AR — the path this task's own recorded stop chose. `acknowledge_breach` is the
-    acknowledgement `warn` mode requires: an explicit act, so a breach is never
-    accepted by the mere act of asking.
+    Since T-3.AR.06 an **unstated exposure means the live one**: the service computes
+    it across open invoices, unbilled orders and on-account receipts in the order's
+    own currency. A caller may still state a number, and it is validated and recorded
+    as it stands — but stating nothing is what asks for the figure the credit
+    statement would show. `acknowledge_breach` is the acknowledgement `warn` mode
+    requires: an explicit act, so a breach is never accepted by the mere act of asking.
     """
 
-    exposure: str
+    # Nullable rather than merely defaulted: T-0.API.01's convention is that an
+    # optional field says so in the contract, so "compute it" is an explicit null and
+    # not an implicit absence.
+    exposure: str | None = None
     # Nullable rather than merely defaulted: T-0.API.01's convention is that an
     # optional field says so in the contract, so "not acknowledged" is an explicit null
     # and not an implicit absence. Only `true` acknowledges.
@@ -2467,6 +2570,7 @@ def set_company_credit_check_mode(
         base_currency=company.base_currency,
         fiscal_year_start_month=company.fiscal_year_start_month,
         credit_check_mode=company.credit_check_mode,
+        cash_drawer_required=company.cash_drawer_required,
     )
     session.commit()
     return response
@@ -2499,9 +2603,10 @@ def confirm_sales_order(
 ) -> OrderOut:
     """Confirm an order, applying the company's credit-check mode as it is placed.
 
-    The exposure is **stated by the caller** until T-3.AR.06 computes it across open
-    AR. The refusal a `block` breach produces is the point of the endpoint: it is the
-    one place an order stops being an intention.
+    A body that states no exposure is judged against the customer's **live** exposure
+    (T-3.AR.06) — the same figure a credit statement shows — while a stated one is
+    validated and recorded as it stands. The refusal a `block` breach produces is the
+    point of the endpoint: it is the one place an order stops being an intention.
     """
     session = context.session
     require(
@@ -2926,3 +3031,467 @@ def redeem(payload: CouponRedeemIn, code: str, context: Context) -> CouponRedemp
     )
     session.commit()
     return response
+
+
+# --- T-3.POS.01 / .02 / .03 / .04 / .05 — the till ------------------------------
+# A till has no database of its own (T-0.API.02): it rings a sale up through these
+# endpoints, so the scan, the price, the posting and the receipt are the same code
+# whether they were reached from a keyboard or from the API. The capabilities are
+# `pos.sell`, `pos.drawer` and `pos.shift`, so a company can let somebody use the
+# drawer without letting them change a shift, or vice versa.
+
+
+class PosSaleIn(BaseModel):
+    """Ring up a sale: which till, which location, and for whom (if anybody)."""
+
+    number: str = Field(min_length=1, max_length=32)
+    terminal: str = Field(min_length=1, max_length=32)
+    location_code: str = Field(min_length=1, max_length=32)
+    customer_code: str | None = None
+    currency: str | None = None
+    sold_on: date | None = None
+
+
+class PosScanIn(BaseModel):
+    """Scan one code onto an open sale, stating the shelf price it is discounted from."""
+
+    barcode: str = Field(min_length=1, max_length=64)
+    base_price: str
+    quantity: str | None = None
+    uom: str | None = None
+    campaign: str | None = None
+
+
+class PosTenderIn(BaseModel):
+    """Take one payment: what kind, how much was handed over, and its reference."""
+
+    tender_type: str
+    amount: str
+    reference: str | None = None
+
+
+class PosVoidIn(BaseModel):
+    """Void an abandoned basket or refund a completed sale, saying who decided and why."""
+
+    reason: str = Field(min_length=1, max_length=200)
+
+
+class PosLineOut(BaseModel):
+    line_no: int
+    description: str
+    barcode: str | None
+    quantity: str
+    uom: str
+    unit_price: str
+    tax: str
+    tax_rule: str | None
+    rule: str | None
+
+
+class PosTenderOut(BaseModel):
+    tender_no: int
+    tender_type: str
+    tendered: str
+    applied: str
+    reference: str | None
+
+
+class PosSaleOut(BaseModel):
+    number: str
+    terminal: str
+    status: str
+    sold_on: date
+    currency: str
+    shift: str | None
+    net: str
+    tax: str
+    total: str
+    tendered: str
+    change: str
+    lines: list[PosLineOut]
+    tenders: list[PosTenderOut]
+
+
+class PosReceiptOut(BaseModel):
+    receipt: dict
+
+
+class PosShiftIn(BaseModel):
+    """Open a shift: the terminal and the float the drawer starts with."""
+
+    terminal: str = Field(min_length=1, max_length=32)
+    opening_float: str | None = None
+    on: date | None = None
+
+
+class PosShiftCloseIn(BaseModel):
+    """Close a shift on a count, with the reason a variance needs."""
+
+    counted_cash: str
+    reason: str | None = None
+
+
+class PosShiftOut(BaseModel):
+    id: str
+    terminal: str
+    status: str
+    opened_on: date
+    opening_float: str
+    counted: str | None
+    expected: str | None
+    variance: str | None
+    variance_reason: str | None
+
+
+class DrawerMovementIn(BaseModel):
+    """One note in or out of the drawer, with the reason it moved."""
+
+    terminal: str = Field(min_length=1, max_length=32)
+    movement_type: str
+    amount: str
+    reason: str = Field(min_length=1, max_length=200)
+    on: date | None = None
+
+
+class DrawerMovementOut(BaseModel):
+    id: str
+    terminal: str
+    movement_type: str
+    amount: str
+    reason: str
+    moved_on: date
+    actor: str
+
+
+class PosReportOut(BaseModel):
+    report: dict
+
+
+class CashDrawerPolicyIn(BaseModel):
+    """Whether this company's tills must trade inside an open shift (null = not stated)."""
+
+    required: bool | None = None
+
+
+def _pos_sale_out(sale) -> PosSaleOut:
+    return PosSaleOut(
+        number=sale.number,
+        terminal=sale.terminal,
+        status=sale.status,
+        sold_on=sale.sold_on,
+        currency=sale.currency,
+        shift=None if sale.shift_id is None else str(sale.shift_id),
+        net=_money(sale.net_amount),
+        tax=_money(sale.tax_amount),
+        total=_money(sale.gross_amount),
+        tendered=_money(sale_tendered(sale)),
+        change=_money(sale_change(sale)),
+        lines=[
+            PosLineOut(
+                line_no=line.line_no,
+                description=line.description,
+                barcode=line.barcode,
+                quantity=_money(line.quantity),
+                uom=line.uom,
+                unit_price=_money(line.unit_price),
+                tax=_money(line.tax_amount),
+                tax_rule=line.tax_rule_code,
+                rule=line.rule_code,
+            )
+            for line in sale.lines
+        ],
+        tenders=[
+            PosTenderOut(
+                tender_no=row.tender_no,
+                tender_type=row.tender_type,
+                tendered=_money(row.tendered),
+                applied=_money(row.applied),
+                reference=row.reference,
+            )
+            for row in sale.tenders
+        ],
+    )
+
+
+def _pos_shift_out(shift) -> PosShiftOut:
+    return PosShiftOut(
+        id=str(shift.id),
+        terminal=shift.terminal,
+        status=shift.status,
+        opened_on=shift.opened_on,
+        opening_float=_money(shift.opening_float),
+        counted=None if shift.counted_cash is None else _money(shift.counted_cash),
+        expected=None if shift.expected_cash is None else _money(shift.expected_cash),
+        variance=None if shift.variance is None else _money(shift.variance),
+        variance_reason=shift.variance_reason,
+    )
+
+
+@app.post(f"{BASE}/pos/sales", response_model=PosSaleOut, status_code=201, tags=["pos"])
+def open_pos_sale(payload: PosSaleIn, context: Context) -> PosSaleOut:
+    """Start a basket at one till. Nothing has moved: no stock, no posting."""
+    session = context.session
+    require(session, company_id=context.company_id, subject=context.actor,
+            capability="pos.sell", entity="pos_sale")
+    location = location_by_code(
+        session, company_id=context.company_id, code=payload.location_code
+    )
+    customer = (
+        customer_by_code(session, company_id=context.company_id, code=payload.customer_code)
+        if payload.customer_code
+        else None
+    )
+    sale = open_sale(
+        session,
+        company_id=context.company_id,
+        number=payload.number,
+        terminal=payload.terminal,
+        location=location,
+        customer=customer,
+        currency=payload.currency,
+        sold_on=payload.sold_on,
+    )
+    response = _pos_sale_out(sale)
+    session.commit()
+    return response
+
+
+@app.post(f"{BASE}/pos/sales/{{number}}/scan", response_model=PosSaleOut, tags=["pos"])
+def scan_pos_sale(number: str, payload: PosScanIn, context: Context) -> PosSaleOut:
+    """Scan a code onto the basket: it resolves to an item, and the engine prices it."""
+    session = context.session
+    require(session, company_id=context.company_id, subject=context.actor,
+            capability="pos.sell", entity="pos_sale")
+    sale = pos_sale_by_number(session, company_id=context.company_id, number=number)
+    scan(
+        session,
+        sale,
+        barcode=payload.barcode,
+        base_price=payload.base_price,
+        quantity=payload.quantity or 1,
+        uom=payload.uom,
+        campaign=payload.campaign,
+    )
+    response = _pos_sale_out(sale)
+    session.commit()
+    return response
+
+
+@app.post(f"{BASE}/pos/sales/{{number}}/tender", response_model=PosSaleOut, tags=["pos"])
+def tender_pos_sale(number: str, payload: PosTenderIn, context: Context) -> PosSaleOut:
+    """Take one payment, recording what was handed over and what it covered."""
+    session = context.session
+    require(session, company_id=context.company_id, subject=context.actor,
+            capability="pos.sell", entity="pos_sale")
+    sale = pos_sale_by_number(session, company_id=context.company_id, number=number)
+    tender(session, sale, tender_type=payload.tender_type, amount=payload.amount,
+           reference=payload.reference)
+    response = _pos_sale_out(sale)
+    session.commit()
+    return response
+
+
+@app.post(f"{BASE}/pos/sales/{{number}}/complete", response_model=PosSaleOut, tags=["pos"])
+def complete_pos_sale(number: str, context: Context) -> PosSaleOut:
+    """Finish the sale: issue its stock and post its revenue.
+
+    Refused unless the tenders cover it, and — where the company manages drawers —
+    unless the terminal has an open shift.
+    """
+    session = context.session
+    require(session, company_id=context.company_id, subject=context.actor,
+            capability="pos.sell", entity="pos_sale")
+    sale = pos_sale_by_number(session, company_id=context.company_id, number=number)
+    complete_sale(session, sale)
+    response = _pos_sale_out(sale)
+    session.commit()
+    return response
+
+
+@app.get(f"{BASE}/pos/sales/{{number}}/receipt", response_model=PosReceiptOut, tags=["pos"])
+def pos_receipt(number: str, context: Context) -> PosReceiptOut:
+    """The receipt, rebuilt from the stored sale — a reprint is what was handed over."""
+    session = context.session
+    require(session, company_id=context.company_id, subject=context.actor,
+            capability="pos.read", entity="pos_sale")
+    sale = pos_sale_by_number(session, company_id=context.company_id, number=number)
+    return PosReceiptOut(receipt=receipt_rows(sale))
+
+
+@app.post(f"{BASE}/pos/sales/{{number}}/void", response_model=PosSaleOut, tags=["pos"])
+def void_pos_sale(number: str, payload: PosVoidIn, context: Context) -> PosSaleOut:
+    """Void an abandoned basket, or refund a completed sale and reverse what it did."""
+    session = context.session
+    require(session, company_id=context.company_id, subject=context.actor,
+            capability="pos.sell", entity="pos_sale")
+    sale = pos_sale_by_number(session, company_id=context.company_id, number=number)
+    void_sale(session, sale, reason=payload.reason, actor=context.actor)
+    response = _pos_sale_out(sale)
+    session.commit()
+    return response
+
+
+@app.post(f"{BASE}/pos/drawer-movements", response_model=DrawerMovementOut,
+          status_code=201, tags=["pos"])
+def record_drawer_movement(
+    payload: DrawerMovementIn, context: Context
+) -> DrawerMovementOut:
+    """Record cash in or out of the drawer outside a sale, with its reason."""
+    session = context.session
+    require(session, company_id=context.company_id, subject=context.actor,
+            capability="pos.drawer", entity="pos_drawer_movement")
+    row = record_movement(
+        session,
+        company_id=context.company_id,
+        terminal=payload.terminal,
+        movement_type=payload.movement_type,
+        amount=payload.amount,
+        reason=payload.reason,
+        actor=context.actor,
+        moved_on=payload.on,
+    )
+    response = DrawerMovementOut(
+        id=str(row.id), terminal=row.terminal, movement_type=row.movement_type,
+        amount=_money(row.amount), reason=row.reason, moved_on=row.moved_on,
+        actor=row.actor,
+    )
+    session.commit()
+    return response
+
+
+@app.post(f"{BASE}/pos/cash-drawer-policy", response_model=CompanyOut, tags=["pos"])
+def set_pos_cash_drawer_policy(
+    payload: CashDrawerPolicyIn, context: Context
+) -> CompanyOut:
+    """State, change or withdraw whether this company's tills need an open shift."""
+    session = context.session
+    require(session, company_id=context.company_id, subject=context.actor,
+            capability="company.configure", entity="company",
+            entity_id=context.company_id)
+    company = session.get(Company, context.company_id)
+    if company is None:
+        raise ApiError(404, "company_not_found", f"no company {context.company_id}")
+    set_cash_drawer_required(session, company, required=payload.required)
+    response = CompanyOut(
+        id=str(company.id), code=company.code, name=company.name,
+        base_currency=company.base_currency,
+        fiscal_year_start_month=company.fiscal_year_start_month,
+        credit_check_mode=company.credit_check_mode,
+        cash_drawer_required=company.cash_drawer_required,
+    )
+    session.commit()
+    return response
+
+
+@app.post(f"{BASE}/pos/shifts", response_model=PosShiftOut, status_code=201, tags=["pos"])
+def open_pos_shift(payload: PosShiftIn, context: Context) -> PosShiftOut:
+    """Open a shift on a terminal with its float; a second on that till is refused."""
+    session = context.session
+    require(session, company_id=context.company_id, subject=context.actor,
+            capability="pos.shift", entity="pos_shift")
+    shift = open_shift(
+        session,
+        company_id=context.company_id,
+        terminal=payload.terminal,
+        opening_float=payload.opening_float or 0,
+        actor=context.actor,
+        on=payload.on,
+    )
+    response = _pos_shift_out(shift)
+    session.commit()
+    return response
+
+
+@app.get(f"{BASE}/pos/shifts/current", response_model=PosShiftOut, tags=["pos"])
+def current_pos_shift(terminal: str, context: Context) -> PosShiftOut:
+    """The shift this terminal is trading on, or a refusal naming what is missing."""
+    session = context.session
+    require(session, company_id=context.company_id, subject=context.actor,
+            capability="pos.read", entity="pos_shift")
+    shift = current_shift(session, company_id=context.company_id, terminal=terminal)
+    if shift is None:
+        raise ApiError(404, "no_open_shift", f"terminal {terminal!r} is not trading")
+    return _pos_shift_out(shift)
+
+
+@app.post(f"{BASE}/pos/shifts/{{shift_id}}/close", response_model=PosShiftOut, tags=["pos"])
+def close_pos_shift(
+    shift_id: str, payload: PosShiftCloseIn, context: Context
+) -> PosShiftOut:
+    """Close a shift on a counted drawer, recording the expected figure and the variance."""
+    session = context.session
+    require(session, company_id=context.company_id, subject=context.actor,
+            capability="pos.shift", entity="pos_shift", entity_id=shift_id)
+    shift = _pos_shift(session, context, shift_id)
+    close_shift(
+        session, shift, counted_cash=payload.counted_cash, actor=context.actor,
+        reason=payload.reason,
+    )
+    response = _pos_shift_out(shift)
+    session.commit()
+    return response
+
+
+def _pos_shift(session: Session, context: RequestContext, shift_id: str):
+    """The shift an endpoint names, or a refusal — never another company's."""
+    try:
+        wanted = uuid.UUID(shift_id)
+    except ValueError as exc:
+        raise ApiError(422, "invalid_shift_id", f"not a shift id: {shift_id!r}") from exc
+    shift = session.get(PosShift, wanted)
+    if shift is None or shift.company_id != context.company_id:
+        raise ApiError(404, "shift_not_found", f"no shift {shift_id!r} in this company")
+    return shift
+
+
+@app.get(f"{BASE}/pos/z-reports/shift/{{shift_id}}", response_model=PosReportOut, tags=["pos"])
+def pos_shift_report(shift_id: str, context: Context) -> PosReportOut:
+    """The shift's Z-Report: sales, tax, tenders, voids, refunds and the drawer."""
+    session = context.session
+    require(session, company_id=context.company_id, subject=context.actor,
+            capability="pos.read", entity="pos_report", entity_id=shift_id)
+    shift = _pos_shift(session, context, shift_id)
+    return PosReportOut(report=_jsonable(shift_report(session, shift)))
+
+
+@app.get(f"{BASE}/pos/z-reports/day", response_model=PosReportOut, tags=["pos"])
+def pos_day_report(on: date, context: Context) -> PosReportOut:
+    """The day's Z-Report: every shift of that day, added exactly."""
+    session = context.session
+    require(session, company_id=context.company_id, subject=context.actor,
+            capability="pos.read", entity="pos_report")
+    return PosReportOut(
+        report=_jsonable(day_report(session, company_id=context.company_id, on=on))
+    )
+
+
+@app.get(f"{BASE}/pos/reconciliation", response_model=PosReportOut, tags=["pos"])
+def pos_reconciliation(
+    on: date, context: Context, terminal: str | None = None
+) -> PosReportOut:
+    """The day's takings and stock against the ledger, per day and per terminal."""
+    session = context.session
+    require(session, company_id=context.company_id, subject=context.actor,
+            capability="pos.read", entity="pos_sale")
+    return PosReportOut(
+        report=_jsonable(
+            reconcile_pos(session, company_id=context.company_id, on=on, terminal=terminal)
+        )
+    )
+
+
+def _jsonable(value: Any) -> Any:
+    """A report as JSON: decimals as their exact string form, uuids as strings.
+
+    The platform's money rule (DOMAIN-MODELS §2) holds at the boundary too: an amount
+    crosses as a decimal *string*, never as a float.
+    """
+    if isinstance(value, dict):
+        return {str(key): _jsonable(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_jsonable(item) for item in value]
+    if isinstance(value, Decimal):
+        return format(value, "f")
+    if isinstance(value, (uuid.UUID, date, datetime)):
+        return str(value)
+    return value

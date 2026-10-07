@@ -193,6 +193,17 @@ from app.ar.invoices import InvoiceError
 from app.ar.reconciliation import ReconciliationError as ArReconciliationError
 from app.ar.recurring import RecurringError
 from app.sales.tax import TaxError
+from app.pos.sales import (
+    PosError,
+    complete_sale,
+    open_sale,
+    receipt as receipt_rows,
+    sale_by_number as pos_sale_by_number,
+    sale_change,
+    sale_tendered,
+    scan,
+    tender,
+)
 from app.security import (
     AccessDenied,
     hidden_fields,
@@ -766,6 +777,11 @@ async def _pricing_error(_request: Request, exc: PricingError) -> JSONResponse:
 @app.exception_handler(FulfilmentError)
 async def _fulfilment_error(_request: Request, exc: FulfilmentError) -> JSONResponse:
     return _error(422, "fulfilment_error", str(exc))
+
+
+@app.exception_handler(PosError)
+async def _pos_error(_request: Request, exc: PosError) -> JSONResponse:
+    return _error(422, "pos_error", str(exc))
 
 
 @app.exception_handler(InvoiceError)
@@ -2982,3 +2998,232 @@ def redeem(payload: CouponRedeemIn, code: str, context: Context) -> CouponRedemp
     )
     session.commit()
     return response
+
+
+# --- T-3.POS.01 / .02 / .03 / .04 / .05 — the till ------------------------------
+# A till has no database of its own (T-0.API.02): it rings a sale up through these
+# endpoints, so the scan, the price, the posting and the receipt are the same code
+# whether they were reached from a keyboard or from the API. The capabilities are
+# `pos.sell`, `pos.drawer` and `pos.shift`, so a company can let somebody use the
+# drawer without letting them change a shift, or vice versa.
+
+
+class PosSaleIn(BaseModel):
+    """Ring up a sale: which till, which location, and for whom (if anybody)."""
+
+    number: str = Field(min_length=1, max_length=32)
+    terminal: str = Field(min_length=1, max_length=32)
+    location_code: str = Field(min_length=1, max_length=32)
+    customer_code: str | None = None
+    currency: str | None = None
+    sold_on: date | None = None
+
+
+class PosScanIn(BaseModel):
+    """Scan one code onto an open sale, stating the shelf price it is discounted from."""
+
+    barcode: str = Field(min_length=1, max_length=64)
+    base_price: str
+    quantity: str | None = None
+    uom: str | None = None
+    campaign: str | None = None
+
+
+class PosTenderIn(BaseModel):
+    """Take one payment: what kind, how much was handed over, and its reference."""
+
+    tender_type: str
+    amount: str
+    reference: str | None = None
+
+
+class PosVoidIn(BaseModel):
+    """Void an abandoned basket or refund a completed sale, saying who decided and why."""
+
+    reason: str = Field(min_length=1, max_length=200)
+
+
+class PosLineOut(BaseModel):
+    line_no: int
+    description: str
+    barcode: str | None
+    quantity: str
+    uom: str
+    unit_price: str
+    tax: str
+    tax_rule: str | None
+    rule: str | None
+
+
+class PosTenderOut(BaseModel):
+    tender_no: int
+    tender_type: str
+    tendered: str
+    applied: str
+    reference: str | None
+
+
+class PosSaleOut(BaseModel):
+    number: str
+    terminal: str
+    status: str
+    sold_on: date
+    currency: str
+    shift: str | None
+    net: str
+    tax: str
+    total: str
+    tendered: str
+    change: str
+    lines: list[PosLineOut]
+    tenders: list[PosTenderOut]
+
+
+class PosReceiptOut(BaseModel):
+    receipt: dict
+
+
+def _pos_sale_out(sale) -> PosSaleOut:
+    return PosSaleOut(
+        number=sale.number,
+        terminal=sale.terminal,
+        status=sale.status,
+        sold_on=sale.sold_on,
+        currency=sale.currency,
+        shift=None if sale.shift_id is None else str(sale.shift_id),
+        net=_money(sale.net_amount),
+        tax=_money(sale.tax_amount),
+        total=_money(sale.gross_amount),
+        tendered=_money(sale_tendered(sale)),
+        change=_money(sale_change(sale)),
+        lines=[
+            PosLineOut(
+                line_no=line.line_no,
+                description=line.description,
+                barcode=line.barcode,
+                quantity=_money(line.quantity),
+                uom=line.uom,
+                unit_price=_money(line.unit_price),
+                tax=_money(line.tax_amount),
+                tax_rule=line.tax_rule_code,
+                rule=line.rule_code,
+            )
+            for line in sale.lines
+        ],
+        tenders=[
+            PosTenderOut(
+                tender_no=row.tender_no,
+                tender_type=row.tender_type,
+                tendered=_money(row.tendered),
+                applied=_money(row.applied),
+                reference=row.reference,
+            )
+            for row in sale.tenders
+        ],
+    )
+
+
+@app.post(f"{BASE}/pos/sales", response_model=PosSaleOut, status_code=201, tags=["pos"])
+def open_pos_sale(payload: PosSaleIn, context: Context) -> PosSaleOut:
+    """Start a basket at one till. Nothing has moved: no stock, no posting."""
+    session = context.session
+    require(session, company_id=context.company_id, subject=context.actor,
+            capability="pos.sell", entity="pos_sale")
+    location = location_by_code(
+        session, company_id=context.company_id, code=payload.location_code
+    )
+    customer = (
+        customer_by_code(session, company_id=context.company_id, code=payload.customer_code)
+        if payload.customer_code
+        else None
+    )
+    sale = open_sale(
+        session,
+        company_id=context.company_id,
+        number=payload.number,
+        terminal=payload.terminal,
+        location=location,
+        customer=customer,
+        currency=payload.currency,
+        sold_on=payload.sold_on,
+    )
+    response = _pos_sale_out(sale)
+    session.commit()
+    return response
+
+
+@app.post(f"{BASE}/pos/sales/{{number}}/scan", response_model=PosSaleOut, tags=["pos"])
+def scan_pos_sale(number: str, payload: PosScanIn, context: Context) -> PosSaleOut:
+    """Scan a code onto the basket: it resolves to an item, and the engine prices it."""
+    session = context.session
+    require(session, company_id=context.company_id, subject=context.actor,
+            capability="pos.sell", entity="pos_sale")
+    sale = pos_sale_by_number(session, company_id=context.company_id, number=number)
+    scan(
+        session,
+        sale,
+        barcode=payload.barcode,
+        base_price=payload.base_price,
+        quantity=payload.quantity or 1,
+        uom=payload.uom,
+        campaign=payload.campaign,
+    )
+    response = _pos_sale_out(sale)
+    session.commit()
+    return response
+
+
+@app.post(f"{BASE}/pos/sales/{{number}}/tender", response_model=PosSaleOut, tags=["pos"])
+def tender_pos_sale(number: str, payload: PosTenderIn, context: Context) -> PosSaleOut:
+    """Take one payment, recording what was handed over and what it covered."""
+    session = context.session
+    require(session, company_id=context.company_id, subject=context.actor,
+            capability="pos.sell", entity="pos_sale")
+    sale = pos_sale_by_number(session, company_id=context.company_id, number=number)
+    tender(session, sale, tender_type=payload.tender_type, amount=payload.amount,
+           reference=payload.reference)
+    response = _pos_sale_out(sale)
+    session.commit()
+    return response
+
+
+@app.post(f"{BASE}/pos/sales/{{number}}/complete", response_model=PosSaleOut, tags=["pos"])
+def complete_pos_sale(number: str, context: Context) -> PosSaleOut:
+    """Finish the sale: issue its stock and post its revenue.
+
+    Refused unless the tenders cover it, and — where the company manages drawers —
+    unless the terminal has an open shift.
+    """
+    session = context.session
+    require(session, company_id=context.company_id, subject=context.actor,
+            capability="pos.sell", entity="pos_sale")
+    sale = pos_sale_by_number(session, company_id=context.company_id, number=number)
+    complete_sale(session, sale)
+    response = _pos_sale_out(sale)
+    session.commit()
+    return response
+
+
+@app.get(f"{BASE}/pos/sales/{{number}}/receipt", response_model=PosReceiptOut, tags=["pos"])
+def pos_receipt(number: str, context: Context) -> PosReceiptOut:
+    """The receipt, rebuilt from the stored sale — a reprint is what was handed over."""
+    session = context.session
+    require(session, company_id=context.company_id, subject=context.actor,
+            capability="pos.read", entity="pos_sale")
+    sale = pos_sale_by_number(session, company_id=context.company_id, number=number)
+    return PosReceiptOut(receipt=receipt_rows(sale))
+
+
+@app.post(f"{BASE}/pos/sales/{{number}}/void", response_model=PosSaleOut, tags=["pos"])
+def void_pos_sale(number: str, payload: PosVoidIn, context: Context) -> PosSaleOut:
+    """Void an abandoned basket, or refund a completed sale and reverse what it did."""
+    session = context.session
+    require(session, company_id=context.company_id, subject=context.actor,
+            capability="pos.sell", entity="pos_sale")
+    sale = pos_sale_by_number(session, company_id=context.company_id, number=number)
+    void_sale(session, sale, reason=payload.reason, actor=context.actor)
+    response = _pos_sale_out(sale)
+    session.commit()
+    return response
+
+

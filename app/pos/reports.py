@@ -50,8 +50,10 @@ from app.pos.sales import (
 from app.pos.shifts import (
     OPENING_FLOAT_REASON,
     PosShift,
+    abandoned_baskets,
+    refund_cash,
+    refunds_on,
     shift_movements,
-    shift_sales,
     shift_totals,
 )
 from app.stock.items import Item, ItemVariant
@@ -77,6 +79,7 @@ def void_sale(
     *,
     reason: str,
     actor: str,
+    on: date | None = None,
     at: datetime | None = None,
 ) -> PosSale:
     """Void an open basket, or refund a completed sale — reversing what it did.
@@ -89,6 +92,11 @@ def void_sale(
 
     A reason and an actor are required, and a sale that is already void is refused:
     refunding twice would put the goods back twice and reverse the revenue twice.
+
+    A refund is dated **when it happens** (`on`, today by default), not when the sale it
+    reverses was rung up: backdating it would restate a period that has been reported
+    and closed, and a refund made a week later would fail on a locked period for no
+    reason but the calendar.
     """
     stated = str(reason or "").strip()
     if not stated:
@@ -103,6 +111,7 @@ def void_sale(
         raise VoidNotAllowed(f"sale {sale.number!r} is already void")
     if sale.status not in (OPEN, COMPLETED):
         raise VoidNotAllowed(f"sale {sale.number!r} is {sale.status}, which takes no void")
+    refunded_on = on or (at.date() if at is not None else date.today())
     if sale.status == COMPLETED:
         location = session.get(Location, sale.location_id)
         for line in sale.lines:
@@ -122,7 +131,7 @@ def void_sale(
                 currency=sale.currency,
                 source_type=REFUND_DOC_TYPE,
                 source_id=sale.id,
-                posting_date=sale.sold_on,
+                posting_date=refunded_on,
                 variant=(
                     session.get(ItemVariant, line.variant_id) if line.variant_id else None
                 ),
@@ -135,7 +144,7 @@ def void_sale(
         reversal = post_journal_entry(
             session,
             company_id=sale.company_id,
-            posting_date=sale.sold_on,
+            posting_date=refunded_on,
             currency=sale.currency,
             memo=f"refund of POS sale {sale.number} ({stated})",
             source_type=REFUND_DOC_TYPE,
@@ -182,12 +191,9 @@ def shift_report(session: Session, shift: PosShift) -> dict:
     section is the closing count the shift recorded, with its variance and reason.
     """
     totals = shift_totals(session, shift)
-    sales = shift_sales(session, shift)
-    voided = _voided_sales(
-        session, company_id=shift.company_id, shift=shift, on=shift.opened_on
+    abandoned = abandoned_baskets(
+        session, company_id=shift.company_id, on=shift.opened_on, terminal=shift.terminal
     )
-    refunds = [sale for sale in voided if sale.journal_entry_id is not None]
-    abandoned = [sale for sale in voided if sale.journal_entry_id is None]
     report = {
         "shift": str(shift.id),
         "terminal": shift.terminal,
@@ -207,11 +213,9 @@ def shift_report(session: Session, shift: PosShift) -> dict:
             "sales": [sale.number for sale in abandoned],
         },
         "refunds": {
-            "count": len(refunds),
-            "value": sum((sale.gross_amount for sale in refunds), Decimal(0)).quantize(
-                MONEY_SCALE
-            ),
-            "sales": [sale.number for sale in refunds],
+            "count": len(totals["refunds"]),
+            "value": totals["refunded"],
+            "sales": totals["refunds"],
         },
         "drawer": {
             "opening_float": totals["opening_float"],
@@ -233,13 +237,17 @@ def shift_report(session: Session, shift: PosShift) -> dict:
 
 
 def _day_sales(session: Session, *, company_id: uuid.UUID, on: date) -> list[PosSale]:
-    """The day's completed sales, oldest first — the rows every bucket is cut from."""
+    """The sales the day rang up, oldest first — the rows every bucket is cut from.
+
+    A sale later refunded is still one the day rang up (its entry says so), so a refund
+    made tomorrow cannot take it out of today's figures.
+    """
     return list(
         session.scalars(
             select(PosSale)
             .where(
                 PosSale.company_id == company_id,
-                PosSale.status == COMPLETED,
+                PosSale.journal_entry_id.is_not(None),
                 PosSale.sold_on == on,
             )
             .order_by(PosSale.number)
@@ -247,9 +255,15 @@ def _day_sales(session: Session, *, company_id: uuid.UUID, on: date) -> list[Pos
     )
 
 
-def _bucket(sales: list[PosSale], movements) -> dict:
-    """One shift's — or the shiftless till's — worth of figures, from its own rows."""
+def _bucket(sales: list[PosSale], movements, refunds: list[PosSale]) -> dict:
+    """One shift's — or the shiftless till's — worth of figures, from its own rows.
+
+    `refunds` are the sales **refunded** on this day by this terminal: they are not
+    sales of the day (the day's sales are the ones it rang up), but the cash they hand
+    back leaves this drawer, so the drawer's own expectation carries them.
+    """
     state = drawer_state(sales, movements)
+    refunded = refund_cash(refunds)
     return {
         "sales": len(sales),
         "net": sum((sale.net_amount for sale in sales), Decimal(0)).quantize(MONEY_SCALE),
@@ -258,12 +272,20 @@ def _bucket(sales: list[PosSale], movements) -> dict:
         "tenders": tender_breakdown(sales),
         "movements": state["movements"],
         "change_paid": state["change_paid"],
-        "expected_cash": state["expected"],
+        "expected_cash": (state["expected"] - refunded).quantize(MONEY_SCALE),
+        "refunded": sum((sale.gross_amount for sale in refunds), Decimal(0)).quantize(
+            MONEY_SCALE
+        ),
+        "refunds": [sale.number for sale in refunds],
     }
 
 
 def day_report(session: Session, *, company_id: uuid.UUID, on: date) -> dict:
     """The day's Z-Report: every shift of that day, and the shiftless trade beside them.
+
+    A day's sales are the sales it **rang up** — refunded or not, because the till took
+    the money — and its refunds are the sales it **refunded**, whatever day they were
+    sold on: the cash going back out belongs to the drawer it left.
 
     The day's figures are the **sum of the shifts' own numbers**, computed from the
     same rows, so "equal to the sum" is arithmetic rather than a rounding promise. The
@@ -281,6 +303,7 @@ def day_report(session: Session, *, company_id: uuid.UUID, on: date) -> dict:
         )
     ]
     day_sales = _day_sales(session, company_id=company_id, on=on)
+    refunds = refunds_on(session, company_id=company_id, on=on)
     claimed = {shift.id for shift in shifts}
     orphans = [sale for sale in day_sales if sale.shift_id not in claimed]
     # Every sale of the day lands in exactly one bucket: its own shift's, or the one for
@@ -291,12 +314,20 @@ def day_report(session: Session, *, company_id: uuid.UUID, on: date) -> dict:
     per_shift = []
     for shift in shifts:
         sales = [sale for sale in day_sales if sale.shift_id == shift.id]
+        # The shift's movements **on this day**: a shift left open past midnight moves
+        # cash on the next day too, and that next day's report is where it belongs —
+        # counting the whole shift's history on the day it opened would add tomorrow's
+        # cash to today and take it out of tomorrow.
         float_only = [
             row
             for row in shift_movements(session, shift)
-            if row.reason != OPENING_FLOAT_REASON
+            if row.reason != OPENING_FLOAT_REASON and row.moved_on == on
         ]
-        bucket = _bucket(sales, float_only)
+        bucket = _bucket(
+            sales,
+            float_only,
+            [sale for sale in refunds if sale.terminal == shift.terminal],
+        )
         bucket.update(
             {
                 "shift": str(shift.id),
@@ -312,6 +343,7 @@ def day_report(session: Session, *, company_id: uuid.UUID, on: date) -> dict:
         ).quantize(MONEY_SCALE)
         per_shift.append(bucket)
     shiftless_sales = sorted(orphans, key=lambda sale: sale.number)
+    traded = {shift.terminal for shift in shifts}
     shiftless = _bucket(
         shiftless_sales,
         [
@@ -319,17 +351,12 @@ def day_report(session: Session, *, company_id: uuid.UUID, on: date) -> dict:
             for row in movements_for(session, company_id=company_id, on=on)
             if row.reason != OPENING_FLOAT_REASON and row.shift_id is None
         ],
+        # Refunds made where no shift was trading that day: the till with no drawer
+        # management its own self, and a refund rung on a terminal whose shift is not
+        # one of the day's.
+        [sale for sale in refunds if sale.terminal not in traded],
     )
-    voided = [
-        sale
-        for sale in session.scalars(
-            select(PosSale).where(
-                PosSale.company_id == company_id,
-                PosSale.status == VOID,
-                PosSale.sold_on == on,
-            )
-        )
-    ]
+    abandoned = abandoned_baskets(session, company_id=company_id, on=on)
     day = {
         "on": on,
         "shifts": per_shift,
@@ -350,19 +377,19 @@ def day_report(session: Session, *, company_id: uuid.UUID, on: date) -> dict:
         "variance": sum(
             (row["variance"] or Decimal(0) for row in per_shift), Decimal(0)
         ).quantize(MONEY_SCALE),
+        # The two apart: a basket abandoned today took nothing, a sale refunded today
+        # gave its money back — and it is today's, whatever day the sale was rung up.
         "voids": {
-            "count": len([sale for sale in voided if sale.journal_entry_id is None]),
-            "value": sum(
-                (sale.gross_amount for sale in voided if sale.journal_entry_id is None),
-                Decimal(0),
-            ).quantize(MONEY_SCALE),
+            "count": len(abandoned),
+            "value": sum((sale.gross_amount for sale in abandoned), Decimal(0)).quantize(
+                MONEY_SCALE
+            ),
         },
         "refunds": {
-            "count": len([sale for sale in voided if sale.journal_entry_id is not None]),
-            "value": sum(
-                (sale.gross_amount for sale in voided if sale.journal_entry_id is not None),
-                Decimal(0),
-            ).quantize(MONEY_SCALE),
+            "count": len(refunds),
+            "value": sum((sale.gross_amount for sale in refunds), Decimal(0)).quantize(
+                MONEY_SCALE
+            ),
         },
     }
     return day

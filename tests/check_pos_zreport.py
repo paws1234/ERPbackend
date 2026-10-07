@@ -24,6 +24,10 @@ Green on all nine:
 9. a sale made on a shift that **opened the day before** is counted on the day it was
    sold, not dropped from the day report
 
+10. a refund made **after** the shift closed belongs to the day it was made: the closed
+   shift's report is byte for byte what it signed off, the refund is stated on its own
+   day, and the shift that paid the cash back expects exactly its float less that cash
+
 **Scratch database only**: it drops and recreates the public schema.
 """
 
@@ -206,13 +210,14 @@ def main() -> int:
         )
 
         # 4 — the abandoned basket is a void, the completed sale is a refund
-        void_sale(session, abandoned, reason="customer walked away", actor="maria")
+        void_sale(session, abandoned, reason="customer walked away", actor="maria",
+                  on=DAY)
         session.commit()
         assert abandoned.status == VOID and abandoned.reversal_entry_id is None
         stock_before = on_hand(session, company_id=COMPANY, item_id=item.id,
                                location_id=till.id)["quantity"]
         original_entry = session.get(JournalEntry, refunded.journal_entry_id)
-        void_sale(session, refunded, reason="wrong size", actor="maria")
+        void_sale(session, refunded, reason="wrong size", actor="maria", on=DAY)
         session.commit()
         assert refunded.status == VOID, refunded.status
         assert refunded.void_reason == "wrong size" and refunded.voided_by == "maria"
@@ -254,11 +259,13 @@ def main() -> int:
         assert report["ties"] is True, report
         assert report["tenders_applied"] == report["gross"], report
         assert report["net"] + report["tax"] == report["gross"], report
-        assert report["net"] == Decimal("200.000000"), report["net"]
-        assert report["tax"] == Decimal("24.000000"), report["tax"]
-        assert report["gross"] == Decimal("224.000000"), report["gross"]
-        assert report["sales"] == 2, report["sales"]
-        assert report["tenders"][CASH]["applied"] == gross, report["tenders"]
+        assert report["net"] == Decimal("300.000000"), report["net"]
+        assert report["tax"] == Decimal("36.000000"), report["tax"]
+        assert report["gross"] == Decimal("336.000000"), report["gross"]
+        # Three rung-up sales, and the one that was refunded is still one of them: the
+        # till took that money and handed it back, which the refund line states.
+        assert report["sales"] == 3, report["sales"]
+        assert report["tenders"][CASH]["applied"] == 2 * gross, report["tenders"]
         assert report["tenders"][CARD]["applied"] == gross, report["tenders"]
         print(
             f"1. the Z-Report ties with no gap: {report['sales']} sales, net"
@@ -280,8 +287,9 @@ def main() -> int:
         print(
             f"3. voids ({report['voids']['count']} worth {report['voids']['value']}) and"
             f" refunds ({report['refunds']['count']} worth {report['refunds']['value']})"
-            " are separate lines, each naming its sale — and neither is counted among"
-            f" the {report['sales']} sales"
+            " are separate lines, each naming its sale: an abandoned basket was never a"
+            f" sale, and the refunded one is counted among the {report['sales']} with the"
+            " money that went back stated beside it"
         )
 
         # 8 — the drawer section
@@ -334,7 +342,9 @@ def main() -> int:
         assert day["tax"] == summed_tax.quantize(Decimal("0.000001")), (day["tax"], summed_tax)
         assert day["sales"] == sum(row["sales"] for row in day["shifts"]), day
         assert day["shifts"][0]["tenders"] == closed["tenders"], "a shift's line moved"
-        day_gross = Decimal("224.000000") + (2 * gross).quantize(Decimal("0.000001"))
+        # The first shift rang up three sales (one of them since refunded, which is
+        # still a sale it took), the afternoon one two.
+        day_gross = ((3 * gross) + (2 * gross)).quantize(Decimal("0.000001"))
         assert day["gross"] == day_gross, (day["gross"], day_gross)
         print(
             f"6. the day report added {len(day['shifts'])} shifts to {day['gross']}"
@@ -374,6 +384,41 @@ def main() -> int:
             f" it was sold ({next_day['gross']} on {tomorrow}, in the shiftless bucket"
             f" the day's shifts did not take) while {DAY}'s own report is unchanged —"
             " revenue is in neither lost nor in two days at once"
+        )
+
+        # 10 — a refund made later belongs to the day it was made
+        refund_day = DAY + timedelta(days=2)
+        closed_before = shift_report(session, shift)
+        later = open_shift(session, company_id=COMPANY, terminal=TERMINAL,
+                           opening_float="200.00", actor="jose", on=refund_day)
+        session.commit()
+        void_sale(session, kept_cash, reason="till error", actor="jose", on=refund_day)
+        session.commit()
+        assert shift_report(session, shift) == closed_before, (
+            "a later refund restated a closed shift's report"
+        )
+        later_report = shift_report(session, later)
+        assert later_report["sales"] == 0 and later_report["gross"] == Decimal(0), (
+            later_report
+        )
+        assert later_report["refunds"] == {
+            "count": 1, "value": gross, "sales": [kept_cash.number]
+        }, later_report["refunds"]
+        # The shift that refunded it never sold anything: its 200.00 float less the
+        # 112.00 the customer was handed back is what its drawer should hold.
+        assert later_report["drawer"]["expected"] == Decimal("88.000000"), (
+            later_report["drawer"]
+        )
+        day_after = day_report(session, company_id=COMPANY, on=refund_day)
+        assert day_after["refunds"] == {"count": 1, "value": gross}, day_after["refunds"]
+        assert day_after["sales"] == 0 and day_after["gross"] == Decimal(0), day_after
+        assert day_after["shifts"][0]["refunds"] == [kept_cash.number], day_after["shifts"]
+        print(
+            f"10. {kept_cash.number} was refunded on {refund_day}: that day states the"
+            f" {later_report['refunds']['value']} that went back, its shift's drawer"
+            f" expects {later_report['drawer']['expected']} (200.00 float less the cash"
+            f" handed over), and the closed shift's {closed_before['gross']} is byte for"
+            " byte what it signed off"
         )
 
     print("\ncheck_pos_zreport: all assertions green")

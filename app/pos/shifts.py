@@ -47,8 +47,15 @@ from sqlalchemy.orm import Mapped, Session, mapped_column, relationship
 
 from app.company import cash_drawer_required_for
 from app.db import Base
-from app.pos.drawer import DrawerMovement, drawer_state, movements_for, tender_breakdown
-from app.pos.sales import COMPLETED, PosSale
+from app.ledger.posting import JournalEntry
+from app.pos.drawer import (
+    CASH,
+    DrawerMovement,
+    drawer_state,
+    movements_for,
+    tender_breakdown,
+)
+from app.pos.sales import COMPLETED, VOID, PosSale
 
 MONEY = Numeric(20, 6)
 MONEY_SCALE = Decimal("0.000001")
@@ -219,18 +226,84 @@ def open_shift(
 
 
 def shift_sales(session: Session, shift: PosShift) -> list[PosSale]:
-    """The completed sales this shift took, oldest first."""
+    """The sales this shift rang up, oldest first — refunded ones included.
+
+    A sale that a **later** refund reversed is still a sale this shift took: it went
+    through the till, the customer paid, and the money is in the drawer the shift
+    counted. Refunding it is a document of its own, on its own day (T-3.POS.04), so
+    reading these by `status` alone would let a refund made tomorrow restate a shift
+    whose report has been signed off. What tells a rung-up sale from an abandoned
+    basket is its entry: only a completed sale has one.
+    """
     return list(
         session.scalars(
             select(PosSale)
             .where(
                 PosSale.company_id == shift.company_id,
                 PosSale.shift_id == shift.id,
-                PosSale.status == COMPLETED,
+                PosSale.journal_entry_id.is_not(None),
             )
             .order_by(PosSale.sold_on, PosSale.number)
         )
     )
+
+
+def refunds_on(
+    session: Session,
+    *,
+    company_id: uuid.UUID,
+    on: date,
+    terminal: str | None = None,
+) -> list[PosSale]:
+    """The sales refunded on a day, by the day the **reversal entry** was posted.
+
+    Not by the day the sale was rung up: a refund happens when it happens, and a refund
+    of last week's sale belongs to today's takings — the period that has to absorb the
+    money going back out. Dated by the entry, because the entry is what the ledger has.
+    """
+    statement = (
+        select(PosSale)
+        .join(JournalEntry, JournalEntry.id == PosSale.reversal_entry_id)
+        .where(
+            PosSale.company_id == company_id,
+            PosSale.reversal_entry_id.is_not(None),
+            JournalEntry.posting_date == on,
+        )
+    )
+    if terminal is not None:
+        statement = statement.where(PosSale.terminal == str(terminal))
+    return list(session.scalars(statement.order_by(PosSale.number)))
+
+
+def refund_cash(sales: list[PosSale]) -> Decimal:
+    """The cash these refunds give back out of the drawer.
+
+    What the customer paid in cash and is handed back — the `applied` part of the cash
+    tenders, because the change they were given at the time is not theirs to keep twice.
+    A refund of a card sale moves no cash at all.
+    """
+    total = Decimal(0)
+    for sale in sales:
+        total += sum(
+            (record.applied for record in sale.tenders if record.tender_type == CASH),
+            Decimal(0),
+        )
+    return total.quantize(MONEY_SCALE)
+
+
+def abandoned_baskets(
+    session: Session, *, company_id: uuid.UUID, on: date, terminal: str | None = None
+) -> list[PosSale]:
+    """The baskets voided on a day that never became sales — nothing to reverse."""
+    statement = select(PosSale).where(
+        PosSale.company_id == company_id,
+        PosSale.status == VOID,
+        PosSale.journal_entry_id.is_(None),
+        PosSale.sold_on == on,
+    )
+    if terminal is not None:
+        statement = statement.where(PosSale.terminal == str(terminal))
+    return list(session.scalars(statement.order_by(PosSale.number)))
 
 
 def shift_movements(session: Session, shift: PosShift) -> list[DrawerMovement]:
@@ -266,8 +339,16 @@ def shift_totals(session: Session, shift: PosShift) -> dict:
     # An opening float recorded as a movement would be counted twice: it is the shift's
     # own `opening_float`, so the movements that count are the ones that are not it.
     float_movements = [row for row in movements if row.reason != OPENING_FLOAT_REASON]
+    # A refund made while this drawer was trading is cash out of the drawer the count
+    # will not find — the sale it reverses stays counted above, so without this the
+    # expectation would be too high by exactly what was handed back.
+    refunded = refunds_on(
+        session, company_id=shift.company_id, on=shift.opened_on, terminal=shift.terminal
+    )
     state = drawer_state(sales, float_movements)
-    expected = (state["expected"] + Decimal(shift.opening_float)).quantize(MONEY_SCALE)
+    expected = (
+        state["expected"] - refund_cash(refunded) + Decimal(shift.opening_float)
+    ).quantize(MONEY_SCALE)
     return {
         "shift": shift.id,
         "terminal": shift.terminal,
@@ -281,6 +362,10 @@ def shift_totals(session: Session, shift: PosShift) -> dict:
         "movements": state["movements"],
         "change_paid": state["change_paid"],
         "expected_cash": expected,
+        "refunded": sum(
+            (sale.gross_amount for sale in refunded), Decimal(0)
+        ).quantize(MONEY_SCALE),
+        "refunds": [sale.number for sale in refunded],
     }
 
 

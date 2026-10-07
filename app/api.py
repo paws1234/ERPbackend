@@ -187,6 +187,7 @@ from app.stock.items import Item, ItemError, item_by_sku
 from app.stock.locations import LocationError, location_by_code
 from app.ar.aging import AgingError
 from app.ar.dunning import DunningError
+from app.ar.exposure import ExposureError
 from app.ar.gateway import GatewayError
 from app.ar.invoices import InvoiceError
 from app.ar.recurring import RecurringError
@@ -784,6 +785,11 @@ async def _tax_error(_request: Request, exc: TaxError) -> JSONResponse:
 @app.exception_handler(AgingError)
 async def _aging_error(_request: Request, exc: AgingError) -> JSONResponse:
     return _error(422, "aging_error", str(exc))
+
+
+@app.exception_handler(ExposureError)
+async def _exposure_error(_request: Request, exc: ExposureError) -> JSONResponse:
+    return _error(422, "exposure_error", str(exc))
 
 
 @app.exception_handler(DunningError)
@@ -2175,13 +2181,18 @@ class OrderOut(BaseModel):
 class ConfirmOrderIn(BaseModel):
     """What confirming an order needs: the customer's exposure, and any acceptance.
 
-    The **exposure is stated by the caller** until T-3.AR.06 computes it across open
-    AR — the path this task's own recorded stop chose. `acknowledge_breach` is the
-    acknowledgement `warn` mode requires: an explicit act, so a breach is never
-    accepted by the mere act of asking.
+    Since T-3.AR.06 an **unstated exposure means the live one**: the service computes
+    it across open invoices, unbilled orders and on-account receipts in the order's
+    own currency. A caller may still state a number, and it is validated and recorded
+    as it stands — but stating nothing is what asks for the figure the credit
+    statement would show. `acknowledge_breach` is the acknowledgement `warn` mode
+    requires: an explicit act, so a breach is never accepted by the mere act of asking.
     """
 
-    exposure: str
+    # Nullable rather than merely defaulted: T-0.API.01's convention is that an
+    # optional field says so in the contract, so "compute it" is an explicit null and
+    # not an implicit absence.
+    exposure: str | None = None
     # Nullable rather than merely defaulted: T-0.API.01's convention is that an
     # optional field says so in the contract, so "not acknowledged" is an explicit null
     # and not an implicit absence. Only `true` acknowledges.
@@ -2535,9 +2546,10 @@ def confirm_sales_order(
 ) -> OrderOut:
     """Confirm an order, applying the company's credit-check mode as it is placed.
 
-    The exposure is **stated by the caller** until T-3.AR.06 computes it across open
-    AR. The refusal a `block` breach produces is the point of the endpoint: it is the
-    one place an order stops being an intention.
+    A body that states no exposure is judged against the customer's **live** exposure
+    (T-3.AR.06) — the same figure a credit statement shows — while a stated one is
+    validated and recorded as it stands. The refusal a `block` breach produces is the
+    point of the endpoint: it is the one place an order stops being an intention.
     """
     session = context.session
     require(

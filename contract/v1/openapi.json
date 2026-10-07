@@ -241,7 +241,7 @@
         "type": "object"
       },
       "ConfirmOrderIn": {
-        "description": "What confirming an order needs: the customer's exposure, and any acceptance.\n\nThe **exposure is stated by the caller** until T-3.AR.06 computes it across open\nAR \u2014 the path this task's own recorded stop chose. `acknowledge_breach` is the\nacknowledgement `warn` mode requires: an explicit act, so a breach is never\naccepted by the mere act of asking.",
+        "description": "What confirming an order needs: the customer's exposure, and any acceptance.\n\nSince T-3.AR.06 an **unstated exposure means the live one**: the service computes\nit across open invoices, unbilled orders and on-account receipts in the order's\nown currency. A caller may still state a number, and it is validated and recorded\nas it stands \u2014 but stating nothing is what asks for the figure the credit\nstatement would show. `acknowledge_breach` is the acknowledgement `warn` mode\nrequires: an explicit act, so a breach is never accepted by the mere act of asking.",
         "properties": {
           "acknowledge_breach": {
             "anyOf": [
@@ -255,13 +255,17 @@
             "title": "Acknowledge Breach"
           },
           "exposure": {
-            "title": "Exposure",
-            "type": "string"
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Exposure"
           }
         },
-        "required": [
-          "exposure"
-        ],
         "title": "ConfirmOrderIn",
         "type": "object"
       },
@@ -7158,7 +7162,7 @@
     },
     "/api/v1/sales-orders/{number}/confirm": {
       "post": {
-        "description": "Confirm an order, applying the company's credit-check mode as it is placed.\n\nThe exposure is **stated by the caller** until T-3.AR.06 computes it across open\nAR. The refusal a `block` breach produces is the point of the endpoint: it is the\none place an order stops being an intention.",
+        "description": "Confirm an order, applying the company's credit-check mode as it is placed.\n\nA body that states no exposure is judged against the customer's **live** exposure\n(T-3.AR.06) \u2014 the same figure a credit statement shows \u2014 while a stated one is\nvalidated and recorded as it stands. The refusal a `block` breach produces is the\npoint of the endpoint: it is the one place an order stops being an intention.",
         "operationId": "confirm_sales_order_api_v1_sales_orders__number__confirm_post",
         "parameters": [
           {

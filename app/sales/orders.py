@@ -25,10 +25,11 @@ every other decision in this codebase, because "the decision shows the limit, th
 exposure and the order value that produced it" has to keep meaning the same thing after
 somebody changes the customer's limit or the company's mode.
 
-**Where the exposure comes from.** T-3.AR.06 owns the *live* exposure across open AR.
-Until it exists, the caller **states** the exposure (`exposure=`), and the decision
-records the number it was given rather than one this module guessed: a `warn` or `block`
-outcome that understated what a customer already owes would look exactly like a pass.
+**Where the exposure comes from.** T-3.AR.06 owns the *live* exposure across open AR,
+and confirmation reads it through `app.ar.exposure` — one implementation, so the
+order-time check and a credit statement cannot disagree. A caller may still **state**
+the exposure (`exposure=`), and then the decision records the number it was given
+rather than one this module guessed; stating nothing is what asks for the live figure.
 """
 
 from __future__ import annotations
@@ -376,10 +377,11 @@ def convert_quotation_to_order(
 def _exposure_value(exposure: Any) -> Decimal:
     """The caller's stated exposure as an exact, non-negative decimal.
 
-    Until T-3.AR.06 computes the live exposure across open AR, the caller states it —
-    the path T-3.SALES.04's own recorded stop chose. A value that is not an amount is
-    refused here rather than compared: a float, an infinity or a negative would make
-    the breach test mean something nobody agreed to.
+    A caller that states an exposure has taken responsibility for it — T-3.AR.06's
+    :func:`app.ar.exposure.customer_exposure` is what a caller ought to have used, and
+    is what :func:`confirm_order` uses itself when nothing is stated. A value that is
+    not an amount is refused here rather than compared: a float, an infinity or a
+    negative would make the breach test mean something nobody agreed to.
     """
     if isinstance(exposure, float):
         raise CreditError(
@@ -413,11 +415,26 @@ def credit_decision_for(session: Session, order: SalesOrder) -> CreditDecision |
     )
 
 
+def live_exposure(session: Session, order: SalesOrder) -> Decimal:
+    """The customer's live exposure (T-3.AR.06) in the order's own currency.
+
+    One implementation, called here rather than re-derived: the figure a credit
+    statement shows and the figure this decision is judged against are the same
+    arithmetic over the same documents, in the currency the order is stated in.
+
+    Imported inside the function on purpose — `app.ar.exposure` reads this module for
+    the orders an exposure is made of, so a module-scope import here would be a cycle.
+    """
+    from app.ar.exposure import customer_exposure
+
+    return customer_exposure(session, order.customer, currency=order.currency).total
+
+
 def confirm_order(
     session: Session,
     order: SalesOrder,
     *,
-    exposure: Any,
+    exposure: Any = None,
     actor: str,
     acknowledge_breach: bool = False,
     on: datetime | None = None,
@@ -429,6 +446,10 @@ def confirm_order(
     records the decision without acting on it. A company that has stated **no** mode
     is refused rather than defaulted — plan §8 leaves the mode undecided, so there is
     no honest policy to apply.
+
+    An unstated `exposure` is the customer's **live** exposure from T-3.AR.06, so the
+    order-time check and the credit statement cannot disagree; a stated one is
+    validated and recorded as it stands.
 
     The decision is written down either way, with the limit, the exposure and the order
     value that produced it, so it can be shown afterwards and cannot be restated by a
@@ -447,7 +468,9 @@ def confirm_order(
     who = _required(actor, "the actor confirming the order")
     limit = credit_limit_of(order.customer)
     value = order_total(order)
-    stated = _exposure_value(exposure)
+    stated = (
+        _exposure_value(exposure) if exposure is not None else live_exposure(session, order)
+    )
 
     # The order is not on the account yet, so the breach is judged on what confirming
     # it would leave the customer owing, measured against a limit that was actually

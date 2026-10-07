@@ -72,6 +72,7 @@ from app.company import (
     UnknownCreditCheckMode,
     company_base_currency,
     credit_check_mode_of,
+    set_cash_drawer_required,
     set_credit_check_mode,
 )
 from app.db import Base, scope_to_company
@@ -205,6 +206,13 @@ from app.pos.sales import (
     sale_tendered,
     scan,
     tender,
+)
+from app.pos.shifts import (
+    ShiftError,
+    close_shift,
+    current_shift,
+    open_shift,
+    PosShift,
 )
 from app.security import (
     AccessDenied,
@@ -346,6 +354,9 @@ class CompanyOut(BaseModel):
     # T-3.SALES.04: the credit-check policy this company has stated, or null when it has
     # stated none — which the order-time check treats differently from "off".
     credit_check_mode: str | None = None
+    # T-3.POS.03: whether this company's tills must trade inside an open shift. Null is
+    # "not stated", which reads as "no drawer management" — the ordinary shop.
+    cash_drawer_required: bool | None = None
 
 
 class CreditCheckModeIn(BaseModel):
@@ -791,6 +802,11 @@ async def _drawer_error(_request: Request, exc: DrawerError) -> JSONResponse:
     return _error(422, "drawer_error", str(exc))
 
 
+@app.exception_handler(ShiftError)
+async def _shift_error(_request: Request, exc: ShiftError) -> JSONResponse:
+    return _error(422, "shift_error", str(exc))
+
+
 @app.exception_handler(InvoiceError)
 async def _invoice_error(_request: Request, exc: InvoiceError) -> JSONResponse:
     return _error(422, "invoice_error", str(exc))
@@ -876,6 +892,8 @@ def current_company(context: Context) -> CompanyOut:
         name=company.name,
         base_currency=company.base_currency,
         fiscal_year_start_month=company.fiscal_year_start_month,
+        credit_check_mode=company.credit_check_mode,
+        cash_drawer_required=company.cash_drawer_required,
     )
 
 
@@ -2545,6 +2563,7 @@ def set_company_credit_check_mode(
         base_currency=company.base_currency,
         fiscal_year_start_month=company.fiscal_year_start_month,
         credit_check_mode=company.credit_check_mode,
+        cash_drawer_required=company.cash_drawer_required,
     )
     session.commit()
     return response
@@ -3090,6 +3109,33 @@ class PosReceiptOut(BaseModel):
     receipt: dict
 
 
+class PosShiftIn(BaseModel):
+    """Open a shift: the terminal and the float the drawer starts with."""
+
+    terminal: str = Field(min_length=1, max_length=32)
+    opening_float: str | None = None
+    on: date | None = None
+
+
+class PosShiftCloseIn(BaseModel):
+    """Close a shift on a count, with the reason a variance needs."""
+
+    counted_cash: str
+    reason: str | None = None
+
+
+class PosShiftOut(BaseModel):
+    id: str
+    terminal: str
+    status: str
+    opened_on: date
+    opening_float: str
+    counted: str | None
+    expected: str | None
+    variance: str | None
+    variance_reason: str | None
+
+
 class DrawerMovementIn(BaseModel):
     """One note in or out of the drawer, with the reason it moved."""
 
@@ -3108,6 +3154,12 @@ class DrawerMovementOut(BaseModel):
     reason: str
     moved_on: date
     actor: str
+
+
+class CashDrawerPolicyIn(BaseModel):
+    """Whether this company's tills must trade inside an open shift (null = not stated)."""
+
+    required: bool | None = None
 
 
 def _pos_sale_out(sale) -> PosSaleOut:
@@ -3147,6 +3199,20 @@ def _pos_sale_out(sale) -> PosSaleOut:
             )
             for row in sale.tenders
         ],
+    )
+
+
+def _pos_shift_out(shift) -> PosShiftOut:
+    return PosShiftOut(
+        id=str(shift.id),
+        terminal=shift.terminal,
+        status=shift.status,
+        opened_on=shift.opened_on,
+        opening_float=_money(shift.opening_float),
+        counted=None if shift.counted_cash is None else _money(shift.counted_cash),
+        expected=None if shift.expected_cash is None else _money(shift.expected_cash),
+        variance=None if shift.variance is None else _money(shift.variance),
+        variance_reason=shift.variance_reason,
     )
 
 
@@ -3280,5 +3346,90 @@ def record_drawer_movement(
     )
     session.commit()
     return response
+
+
+@app.post(f"{BASE}/pos/cash-drawer-policy", response_model=CompanyOut, tags=["pos"])
+def set_pos_cash_drawer_policy(
+    payload: CashDrawerPolicyIn, context: Context
+) -> CompanyOut:
+    """State, change or withdraw whether this company's tills need an open shift."""
+    session = context.session
+    require(session, company_id=context.company_id, subject=context.actor,
+            capability="company.configure", entity="company",
+            entity_id=context.company_id)
+    company = session.get(Company, context.company_id)
+    if company is None:
+        raise ApiError(404, "company_not_found", f"no company {context.company_id}")
+    set_cash_drawer_required(session, company, required=payload.required)
+    response = CompanyOut(
+        id=str(company.id), code=company.code, name=company.name,
+        base_currency=company.base_currency,
+        fiscal_year_start_month=company.fiscal_year_start_month,
+        credit_check_mode=company.credit_check_mode,
+        cash_drawer_required=company.cash_drawer_required,
+    )
+    session.commit()
+    return response
+
+
+@app.post(f"{BASE}/pos/shifts", response_model=PosShiftOut, status_code=201, tags=["pos"])
+def open_pos_shift(payload: PosShiftIn, context: Context) -> PosShiftOut:
+    """Open a shift on a terminal with its float; a second on that till is refused."""
+    session = context.session
+    require(session, company_id=context.company_id, subject=context.actor,
+            capability="pos.shift", entity="pos_shift")
+    shift = open_shift(
+        session,
+        company_id=context.company_id,
+        terminal=payload.terminal,
+        opening_float=payload.opening_float or 0,
+        actor=context.actor,
+        on=payload.on,
+    )
+    response = _pos_shift_out(shift)
+    session.commit()
+    return response
+
+
+@app.get(f"{BASE}/pos/shifts/current", response_model=PosShiftOut, tags=["pos"])
+def current_pos_shift(terminal: str, context: Context) -> PosShiftOut:
+    """The shift this terminal is trading on, or a refusal naming what is missing."""
+    session = context.session
+    require(session, company_id=context.company_id, subject=context.actor,
+            capability="pos.read", entity="pos_shift")
+    shift = current_shift(session, company_id=context.company_id, terminal=terminal)
+    if shift is None:
+        raise ApiError(404, "no_open_shift", f"terminal {terminal!r} is not trading")
+    return _pos_shift_out(shift)
+
+
+@app.post(f"{BASE}/pos/shifts/{{shift_id}}/close", response_model=PosShiftOut, tags=["pos"])
+def close_pos_shift(
+    shift_id: str, payload: PosShiftCloseIn, context: Context
+) -> PosShiftOut:
+    """Close a shift on a counted drawer, recording the expected figure and the variance."""
+    session = context.session
+    require(session, company_id=context.company_id, subject=context.actor,
+            capability="pos.shift", entity="pos_shift", entity_id=shift_id)
+    shift = _pos_shift(session, context, shift_id)
+    close_shift(
+        session, shift, counted_cash=payload.counted_cash, actor=context.actor,
+        reason=payload.reason,
+    )
+    response = _pos_shift_out(shift)
+    session.commit()
+    return response
+
+
+def _pos_shift(session: Session, context: RequestContext, shift_id: str):
+    """The shift an endpoint names, or a refusal — never another company's."""
+    try:
+        wanted = uuid.UUID(shift_id)
+    except ValueError as exc:
+        raise ApiError(422, "invalid_shift_id", f"not a shift id: {shift_id!r}") from exc
+    shift = session.get(PosShift, wanted)
+    if shift is None or shift.company_id != context.company_id:
+        raise ApiError(404, "shift_not_found", f"no shift {shift_id!r} in this company")
+    return shift
 
 

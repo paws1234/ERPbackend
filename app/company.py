@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import uuid
 
-from sqlalchemy import CheckConstraint, SmallInteger, String, Uuid
+from sqlalchemy import Boolean, CheckConstraint, SmallInteger, String, Uuid
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.audit import SoftDeleteMixin, deny_hard_delete
@@ -95,6 +95,13 @@ class Company(SoftDeleteMixin, Base):
     # nothing", while unstated means no policy has been agreed, and the order-time
     # check refuses until one is.
     credit_check_mode: Mapped[str | None] = mapped_column(String(8))
+    # T-3.POS.03's variable: whether a till has a cash drawer a shift has to be opened
+    # for. Null means *not stated*, and unlike an unstated credit policy that is the
+    # permissive state — a shop selling without drawer management is the ordinary case,
+    # and requiring a shift is the deliberate act. A `False` here is therefore the same
+    # policy as null; it is stored separately so the answer somebody gave is kept
+    # rather than inferred from silence.
+    cash_drawer_required: Mapped[bool | None] = mapped_column(Boolean)
 
 
 # Part of the master convention (T-0.AUDIT.01), registered here because this
@@ -126,6 +133,36 @@ def credit_check_mode_of(session, *, company_id: uuid.UUID) -> str | None:
     if company is None:
         raise UnknownCompanyError(f"no company {company_id}")
     return company.credit_check_mode
+
+
+def cash_drawer_required_for(session, *, company_id: uuid.UUID) -> bool:
+    """Whether this company's tills must trade inside an open shift (T-3.POS.03).
+
+    Unstated reads as ``False``: a till with no drawer management is the common case,
+    and the doubt an unstated *credit* policy creates — judging a customer — does not
+    arise here. Stating it is what makes a shift mandatory.
+    """
+    company = session.get(Company, company_id)
+    if company is None:
+        raise UnknownCompanyError(f"no company {company_id}")
+    return bool(company.cash_drawer_required)
+
+
+def set_cash_drawer_required(
+    session, company: Company, *, required: bool | None
+) -> Company:
+    """State, change or withdraw whether this company's tills need a shift.
+
+    Withdrawing with ``None`` returns the company to *unstated*, which a till reads as
+    "no shift required" — the same behaviour as ``False``, kept apart so the answer
+    that was given is not confused with the answer nobody gave.
+    """
+    if required is None:
+        company.cash_drawer_required = None
+    else:
+        company.cash_drawer_required = bool(required)
+    session.flush()
+    return company
 
 
 def set_credit_check_mode(session, company: Company, *, mode: str | None) -> Company:

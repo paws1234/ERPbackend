@@ -185,6 +185,8 @@ from app.sales.quotations import (
 )
 from app.stock.items import Item, ItemError, item_by_sku
 from app.stock.locations import LocationError, location_by_code
+from app.ar.invoices import InvoiceError
+from app.sales.tax import TaxError
 from app.security import (
     AccessDenied,
     hidden_fields,
@@ -758,6 +760,16 @@ async def _pricing_error(_request: Request, exc: PricingError) -> JSONResponse:
 @app.exception_handler(FulfilmentError)
 async def _fulfilment_error(_request: Request, exc: FulfilmentError) -> JSONResponse:
     return _error(422, "fulfilment_error", str(exc))
+
+
+@app.exception_handler(InvoiceError)
+async def _invoice_error(_request: Request, exc: InvoiceError) -> JSONResponse:
+    return _error(422, "invoice_error", str(exc))
+
+
+@app.exception_handler(TaxError)
+async def _tax_error(_request: Request, exc: TaxError) -> JSONResponse:
+    return _error(422, "tax_error", str(exc))
 
 
 @app.exception_handler(LocationError)

@@ -49,6 +49,15 @@ SOURCE_ACCOUNT_KEYS = {
     # A till's refund puts the goods back, so it reverses through the same account
     # (T-3.POS.04): the credit that took the cost out is debited back.
     "pos_sale_refund": "stock_issue",
+    # A material issue to a work order moves stock into work in progress rather than
+    # into cost of sales (T-4.WO.03): the inventory account is credited as always and
+    # the counterpart is the WIP account, which the finished-goods receipt clears
+    # (T-4.WO.04) and the costing posts the labour and the variance through (T-4.WO.05).
+    "work_order_issue": "work_in_progress",
+    # A production receipt clears the same account: inventory is debited with what the
+    # goods cost and work in progress is credited with what the job had put there
+    # (T-4.WO.04), which is what makes a completed order's WIP land at zero.
+    "work_order_receipt": "work_in_progress",
 }
 
 MONEY_SCALE = Decimal("0.000001")

@@ -225,7 +225,7 @@ def open_shift(
     return shift
 
 
-def shift_sales(session: Session, shift: PosShift) -> list[PosSale]:
+def shift_sales(session: Session, shift: PosShift, *, on: date | None = None) -> list[PosSale]:
     """The sales this shift rang up, oldest first — refunded ones included.
 
     A sale that a **later** refund reversed is still a sale this shift took: it went
@@ -234,18 +234,18 @@ def shift_sales(session: Session, shift: PosShift) -> list[PosSale]:
     reading these by `status` alone would let a refund made tomorrow restate a shift
     whose report has been signed off. What tells a rung-up sale from an abandoned
     basket is its entry: only a completed sale has one.
+
+    `on` narrows it to the sales of one day — how T-3.POS.04's day report takes a
+    shift's slice of a single day when a till was left trading past midnight.
     """
-    return list(
-        session.scalars(
-            select(PosSale)
-            .where(
-                PosSale.company_id == shift.company_id,
-                PosSale.shift_id == shift.id,
-                PosSale.journal_entry_id.is_not(None),
-            )
-            .order_by(PosSale.sold_on, PosSale.number)
-        )
+    statement = select(PosSale).where(
+        PosSale.company_id == shift.company_id,
+        PosSale.shift_id == shift.id,
+        PosSale.journal_entry_id.is_not(None),
     )
+    if on is not None:
+        statement = statement.where(PosSale.sold_on == on)
+    return list(session.scalars(statement.order_by(PosSale.sold_on, PosSale.number)))
 
 
 def refunds_on(
@@ -306,7 +306,9 @@ def abandoned_baskets(
     return list(session.scalars(statement.order_by(PosSale.number)))
 
 
-def shift_movements(session: Session, shift: PosShift) -> list[DrawerMovement]:
+def shift_movements(
+    session: Session, shift: PosShift, *, on: date | None = None
+) -> list[DrawerMovement]:
     """The drawer movements this shift owns, oldest first.
 
     Attributed at record time (or claimed when the shift opened): the movements of the
@@ -314,43 +316,56 @@ def shift_movements(session: Session, shift: PosShift) -> list[DrawerMovement]:
     what stops two shifts on one till each counting the other's cash — the second
     shift's expected cash would be out by the first's movements, and a correct count
     would be refused for a variance nobody made.
+
+    `on` narrows it to one day's movements, the way `shift_sales` does.
     """
-    return list(
-        session.scalars(
-            select(DrawerMovement)
-            .where(
-                DrawerMovement.company_id == shift.company_id,
-                DrawerMovement.shift_id == shift.id,
-            )
-            .order_by(DrawerMovement.moved_at, DrawerMovement.id)
-        )
+    statement = select(DrawerMovement).where(
+        DrawerMovement.company_id == shift.company_id,
+        DrawerMovement.shift_id == shift.id,
     )
+    if on is not None:
+        statement = statement.where(DrawerMovement.moved_on == on)
+    return list(session.scalars(statement.order_by(DrawerMovement.moved_at, DrawerMovement.id)))
 
 
-def shift_totals(session: Session, shift: PosShift) -> dict:
+def shift_totals(session: Session, shift: PosShift, *, on: date | None = None) -> dict:
     """What the shift took and what its drawer should hold — every figure derived.
 
     The sales, their tax, their tenders and the drawer's movements, added from the
     documents each time. A shift that kept a running balance could disagree with the
     sales it is made of; this cannot.
+
+    `on` is the shift's **slice of one day**: the day's sales, the day's movements and
+    the refunds handed back that day, with the opening float carried only on the day the
+    shift opened (the float entered the drawer then, and counting it on both days of a
+    till left trading past midnight would state it twice). Whole-shift figures — what
+    the Z-Report and the close use — leave it unstated, and a shift that traded inside
+    one day answers identically either way.
     """
-    sales = shift_sales(session, shift)
-    movements = shift_movements(session, shift)
+    sales = shift_sales(session, shift, on=on)
+    movements = shift_movements(session, shift, on=on)
     # A refund made while this drawer was trading is cash out of the drawer the count
     # will not find — the sale it reverses stays counted above, so without this the
     # expectation would be too high by exactly what was handed back.
+    # ponytail: the refund is found by terminal and day, so two shifts on one till in
+    # one day each state it (`void_sale` records no shift). Ceiling: a day holding two
+    # shifts on a terminal would state that refund twice; upgrade path: stamp the
+    # refund with the shift that handed the cash back and read it by that shift.
     refunded = refunds_on(
-        session, company_id=shift.company_id, on=shift.opened_on, terminal=shift.terminal
+        session,
+        company_id=shift.company_id,
+        on=on or shift.opened_on,
+        terminal=shift.terminal,
     )
     state = drawer_state(sales, movements)
-    expected = (
-        state["expected"] - refund_cash(refunded) + Decimal(shift.opening_float)
-    ).quantize(MONEY_SCALE)
+    carried = Decimal(shift.opening_float) if on is None or on == shift.opened_on else Decimal(0)
+    expected = (state["expected"] - refund_cash(refunded) + carried).quantize(MONEY_SCALE)
     return {
         "shift": shift.id,
         "terminal": shift.terminal,
         "status": shift.status,
-        "opening_float": Decimal(shift.opening_float).quantize(MONEY_SCALE),
+        "opened_on": shift.opened_on,
+        "opening_float": carried.quantize(MONEY_SCALE),
         "sales": len(sales),
         "net": sum((sale.net_amount for sale in sales), Decimal(0)).quantize(MONEY_SCALE),
         "tax": sum((sale.tax_amount for sale in sales), Decimal(0)).quantize(MONEY_SCALE),

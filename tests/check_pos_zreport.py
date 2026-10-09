@@ -15,14 +15,17 @@ Green on all nine:
    left at, and a reversing entry is posted — a new entry, never an edit
 5. a **void needs a reason and an actor**, and a sale that is already void cannot be
    voided twice
-6. the **day report equals the sum of the shift reports exactly** — from the same rows,
-   not by rounding each shift first — with the trade of a shiftless till in its own bucket
+6. the **day report is the sum of the shift reports exactly** — each of the day's lines
+   *is* that shift's own report for the day (`shift_report(shift, on=day)`), so the
+   equality is arithmetic over one function rather than a rounding promise, and the
+   trade of a till with no shift at all is its own bucket
 7. **reprinting a closed shift's report reproduces it**, because nothing is stored to
    drift: the sales are the shift's own rows and a closed shift takes no more
 8. a shift report carries the drawer's own count, variance and reason
 
-9. a sale made on a shift that **opened the day before** is counted on the day it was
-   sold, not dropped from the day report
+9. a till left **trading past midnight** is reported on the day it traded, in its own
+   shift's line — never in the bucket for the trade no shift took — and the shift's day
+   slices add back to its whole report, with the opening float stated once
 
 10. a refund made **after** the shift closed belongs to the day it was made: the closed
    shift's report is byte for byte what it signed off, the refund is stated on its own
@@ -341,6 +344,16 @@ def main() -> int:
         )
         assert day["tax"] == summed_tax.quantize(Decimal("0.000001")), (day["tax"], summed_tax)
         assert day["sales"] == sum(row["sales"] for row in day["shifts"]), day
+        # The finding's own comparison: the day's lines **are** the shifts' reports, the
+        # same function rather than a recount kept agreeing with it by hand.
+        for row, seen in zip(day["shifts"], (shift, afternoon)):
+            whole = shift_report(session, seen)
+            assert row["gross"] == whole["gross"], (row, whole)
+            assert row["net"] == whole["net"] and row["tax"] == whole["tax"], (row, whole)
+            assert row["tenders"] == whole["tenders"], (row, whole)
+            assert row["movements"] == whole["movements"], (row, whole)
+            assert row["expected_cash"] == whole["expected_cash"], (row, whole)
+            assert row["refunds"] == whole["refunds"]["sales"], (row, whole)
         assert day["shifts"][0]["tenders"] == closed["tenders"], "a shift's line moved"
         # The first shift rang up three sales (one of them since refunded, which is
         # still a sale it took), the afternoon one two.
@@ -352,7 +365,7 @@ def main() -> int:
             f" figures, with the void/refund lines beside them"
         )
 
-        # 9 — a sale whose shift opened another day is still the day's trade
+        # 9 — a till left trading past midnight: the day it traded owns it
         overnight = open_shift(session, company_id=COMPANY, terminal="T3",
                                opening_float="50.00", actor="jose", on=DAY)
         session.commit()
@@ -371,23 +384,40 @@ def main() -> int:
                  reason="next-day courier", actor="jose", on=tomorrow)
         session.commit()
         next_day = day_report(session, company_id=COMPANY, on=tomorrow)
-        assert next_day["shifts"] == [], next_day["shifts"]
-        assert next_day["sales"] == 1, next_day
-        assert next_day["gross"] == gross, next_day
-        assert next_day["shiftless"]["sales"] == 1, next_day["shiftless"]
-        assert next_day["shiftless"]["movements"] == Decimal("-10.000000"), next_day
+        assert len(next_day["shifts"]) == 1, next_day["shifts"]
+        carried = next_day["shifts"][0]
+        assert carried["terminal"] == "T3" and carried["sales"] == 1, carried
+        # Not the bucket for the trade no shift took: the shift that was still trading
+        # is the one whose report counts the sale, so the day says so in that line.
+        assert next_day["shiftless"]["sales"] == 0, next_day["shiftless"]
+        assert next_day["shiftless"]["movements"] == Decimal("0.000000"), next_day["shiftless"]
+        assert next_day["sales"] == 1 and next_day["gross"] == gross, next_day
         assert next_day["expected_cash"] == gross - Decimal("10"), next_day
-        assert shift_report(session, overnight)["gross"] == gross, (
-            shift_report(session, overnight)
+        # The line is the shift's own report for that day, and the shift's days add back
+        # to its whole report — the property the day report exists to have.
+        overnight_tomorrow = shift_report(session, overnight, on=tomorrow)
+        overnight_day = shift_report(session, overnight, on=DAY)
+        whole = shift_report(session, overnight)
+        assert carried["gross"] == overnight_tomorrow["gross"] == gross, (carried, whole)
+        assert carried["movements"] == overnight_tomorrow["movements"], (carried, whole)
+        assert (overnight_day["gross"] + overnight_tomorrow["gross"]) == whole["gross"], (
+            overnight_day, overnight_tomorrow, whole
         )
+        assert (
+            overnight_day["movements"] + overnight_tomorrow["movements"]
+        ) == whole["movements"], (overnight_day, overnight_tomorrow, whole)
+        # The float entered the drawer on the day it opened: stated once, not on both.
+        assert overnight_day["opening_float"] == Decimal("50.000000"), overnight_day
+        assert overnight_tomorrow["opening_float"] == Decimal("0.000000"), overnight_tomorrow
         assert day_report(session, company_id=COMPANY, on=DAY)["sales"] == day["sales"], (
             "the earlier day's report changed"
         )
         print(
-            f"9. a sale made on a shift that opened the day before is counted on the day"
-            f" it was sold ({next_day['gross']} on {tomorrow}, in the shiftless bucket"
-            f" the day's shifts did not take) while {DAY}'s own report is unchanged —"
-            " revenue is in neither lost nor in two days at once"
+            f"9. the till left trading past midnight is reported on the day it traded"
+            f" ({next_day['gross']} on {tomorrow}, in T3's own shift line — nothing in"
+            f" the shiftless bucket the trade did not come from), the shift's two days"
+            f" add back to its whole {whole['gross']}, and {DAY}'s own report is"
+            " unchanged — revenue is neither lost nor in two days at once"
         )
 
         # 10 — a refund made later belongs to the day it was made

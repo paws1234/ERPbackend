@@ -3,7 +3,7 @@
     DATABASE_URL=******localhost:5432/erpv1 \
         python tests/check_credit_exposure.py
 
-Green on all nine:
+Green on all eleven:
 
 1. the exposure is **itemised**: what was invoiced, what was received against it, what
    confirmed orders commit and what has been received on account, adding to the total
@@ -28,6 +28,11 @@ Green on all nine:
 10. goods **shipped but not yet invoiced** stay in the exposure: a four-of-ten shipment
    left the figure where it was, and invoicing it moved the net from `unbilled` to the
    invoice's gross
+11. the interval the review named: a **fully** shipped order nobody has invoiced still
+   counts in full, the order-time check refuses the next order **on it** (`1100.000000`
+   against the `1000` limit — the figure dropping the shipped goods would give `100`),
+   and invoicing it then moves `1000.000000` out of `unbilled` and `1120.000000` into
+   `invoiced` once, never twice
 
 **Scratch database only**: it drops and recreates the public schema.
 """
@@ -508,6 +513,92 @@ def main() -> int:
             f" exactly where it was ({invoiced.components[UNBILLED]} +"
             f" {invoiced.components[INVOICED]} of it billed): measuring the order from"
             " the shipment would have freed credit for goods the customer already has"
+        )
+
+        # 11 — the interval the review named, taken to its end: the order ships **in
+        # full** and nobody invoices it. Nothing at all has been billed for it, so the
+        # whole of it has to still be committed — and the order-time check, which is
+        # the control this figure exists for, has to refuse the next order on it.
+        receive(session, item=widget, location=bin_a, uom="each", quantity="10",
+                value=Decimal("400"), currency="PHP", source_type="goods_receipt",
+                source_id=uuid.uuid4(), posting_date=DAY)
+        session.commit()
+        beacon = create_customer(session, company_id=COMPANY, party_code="BEACON",
+                                 name="Beacon Works", payment_terms_days=TERMS,
+                                 credit_limit=Decimal("1000"))
+        session.commit()
+
+        quote_five = create_quotation(session, company_id=COMPANY, customer_id=beacon.id,
+                                      number="Q-5", issued_on=DAY,
+                                      valid_until=date(2026, 12, 31))
+        session.flush()
+        add_line(session, quote_five, line_no=1, description="Widget", quantity="10",
+                 unit_price="100.00", uom="each", item_id=widget.id, priced_on=DAY)
+        session.flush()
+        fifth = convert_quotation_to_order(session, quote_five, number="SO-5", on=DAY)
+        within = confirm_order(session, fifth, actor="maria")
+        session.commit()
+        assert within.outcome == "within_limit", within.outcome
+
+        listed_five = generate_pick_list(session, fifth, number="PL-5", on=DAY)
+        record_picked(session, listed_five, line_no=1, quantity="10")
+        session.commit()
+        fifth = session.scalar(select(type(fifth)).where(type(fifth).number == "SO-5"))
+        whole = ship_order(session, fifth, number="SH-5", warehouse=bin_a,
+                           lines=[(1, "10")], on=DAY)
+        session.commit()
+        line_five = fifth.lines[0]
+        assert line_five.shipped_quantity == line_five.quantity == Decimal("10.000000"), (
+            line_five.shipped_quantity,
+            line_five.quantity,
+        )
+        shipped_whole = customer_exposure(session, beacon, as_of=DAY)
+        assert shipped_whole.components[UNBILLED] == Decimal("1000.000000"), (
+            shipped_whole.components
+        )
+        assert shipped_whole.total == Decimal("1000.000000"), shipped_whole.total
+
+        quote_six = create_quotation(session, company_id=COMPANY, customer_id=beacon.id,
+                                     number="Q-6", issued_on=DAY,
+                                     valid_until=date(2026, 12, 31))
+        session.flush()
+        add_line(session, quote_six, line_no=1, description="Widget", quantity="1",
+                 unit_price="100.00", uom="each", item_id=widget.id, priced_on=DAY)
+        session.flush()
+        sixth = convert_quotation_to_order(session, quote_six, number="SO-6", on=DAY)
+        session.commit()
+        said_whole = _refused(
+            lambda: confirm_order(session, sixth, actor="maria"), CreditLimitExceeded
+        )
+        session.rollback()
+        assert str(Decimal("1100.000000")) in said_whole, said_whole
+        assert str(LIMIT) in said_whole, said_whole
+
+        billed_whole = create_invoice(
+            session, company_id=COMPANY, number="AR-SO5", customer=beacon,
+            invoice_date=DAY, order_id=fifth.id, shipment_id=whole.id,
+            lines=[{"description": "Widget", "item_id": widget.id, "quantity": "10",
+                    "uom": "each", "unit_price": "100.00",
+                    "order_line_id": line_five.id,
+                    "shipment_line_id": whole.lines[0].id}],
+        )
+        session.commit()
+        post_invoice(session, billed_whole)
+        session.commit()
+        settled_whole = customer_exposure(session, beacon, as_of=DAY)
+        assert settled_whole.components[UNBILLED] == Decimal("0.000000"), (
+            settled_whole.components
+        )
+        assert settled_whole.components[INVOICED] == _gross("1000"), settled_whole.components
+        # Once, not twice: the order left `unbilled` as the invoice arrived in
+        # `invoiced`, so the total is the invoice's gross and not the order **and** it.
+        assert settled_whole.total == _gross("1000"), settled_whole.total
+        print(
+            f"11. SO-5 shipped all ten units with nothing invoiced and the exposure held"
+            f" at {shipped_whole.total}, so the next order was refused on"
+            f" {Decimal('1100.000000')} over the {LIMIT} limit; invoicing it moved"
+            f" {Decimal('1000.000000')} out of unbilled and {settled_whole.total} into"
+            " invoiced exactly once"
         )
 
     print("\ncheck_credit_exposure: all assertions green")

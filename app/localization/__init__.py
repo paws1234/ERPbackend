@@ -13,8 +13,8 @@ Two rules the loader enforces rather than documents:
 * **A pack is validated before it is used.** :func:`load_pack` refuses a pack
   whose account codes repeat, whose parents do not exist, whose classes are
   unknown, whose tax rates are outside 0–100 %, whose statutory rules have no
-  basis, or whose holiday list is not dated — so a broken pack cannot reach a
-  company's books.
+  basis, whose holiday list is not dated, or whose statutory report collects a
+  rule the pack does not state — so a broken pack cannot reach a company's books.
 * **Nothing is assumed on the market's behalf.** The Philippines' fiscal year
   start is still undecided in plan §8 (2026-09-17), so the pack carries
   `fiscal_year_start: null` and :func:`fiscal_year_start` refuses to answer until
@@ -125,9 +125,18 @@ def _validate(market: str, pack: dict) -> None:
         if not rule.get("schedule"):
             fail(f"statutory rule {rule.get('code')!r} states no schedule")
 
+    rule_codes = {rule["code"] for rule in pack["statutory_rules"]}
     for report in pack["statutory_reports"]:
         if not report.get("form") or not report.get("authority"):
             fail(f"statutory report {report.get('form')!r} names no authority")
+        # A report that payroll feeds names the rules it collects — and naming one the pack
+        # does not state is a report that would silently leave a deduction out of itself.
+        for covered in report.get("covers_rules", []):
+            if covered not in rule_codes:
+                fail(
+                    f"statutory report {report['form']} covers the rule {covered!r}, which the"
+                    " pack does not state"
+                )
 
     if not pack["holidays"]:
         fail("the holiday calendar is empty")
@@ -205,6 +214,17 @@ def statutory_rules(market: str, kind: str | None = None) -> list[dict]:
     if kind is None:
         return [dict(rule) for rule in rules]
     return [dict(rule) for rule in rules if rule["kind"] == kind]
+
+
+def statutory_reports(market: str) -> list[dict]:
+    """Every statutory report the pack states, in the pack's order.
+
+    Which forms exist, who they go to, what they cover and — where a payroll run feeds one —
+    which rules it collects. A form that collects nothing from payroll (a VAT return, say) is
+    stated without that list, which is how T-5.PAY.04 tells somebody else's return from its own
+    without knowing anything about the market.
+    """
+    return list(load_pack(market)["statutory_reports"])
 
 
 def holidays(market: str, year: int) -> list[dict]:

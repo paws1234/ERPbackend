@@ -246,7 +246,8 @@
       "authority": "BIR",
       "name": "Monthly Remittance Return of Income Taxes Withheld on Compensation",
       "frequency": "monthly",
-      "covers": "withholding tax on compensation"
+      "covers": "withholding tax on compensation",
+      "covers_rules": ["WHT-COMP", "WHT-COMP-13TH"]
     },
     {
       "form": "1601-EQ",
@@ -260,35 +261,40 @@
       "authority": "BIR",
       "name": "Annual Information Return of Income Taxes Withheld on Compensation",
       "frequency": "annual",
-      "covers": "withholding tax on compensation, with the alphalist"
+      "covers": "withholding tax on compensation, with the alphalist",
+      "covers_rules": ["WHT-COMP", "WHT-COMP-13TH"]
     },
     {
       "form": "2316",
       "authority": "BIR",
       "name": "Certificate of Compensation Payment / Tax Withheld",
       "frequency": "annual",
-      "covers": "per-employee compensation and tax withheld"
+      "covers": "per-employee compensation and tax withheld",
+      "covers_rules": ["WHT-COMP", "WHT-COMP-13TH"]
     },
     {
       "form": "R-3",
       "authority": "SSS",
       "name": "Contribution Collection List",
       "frequency": "monthly",
-      "covers": "SSS employee and employer contributions"
+      "covers": "SSS employee and employer contributions",
+      "covers_rules": ["SSS-EE", "SSS-ER"]
     },
     {
       "form": "RF-1",
       "authority": "PhilHealth",
       "name": "Employer Remittance Report",
       "frequency": "monthly",
-      "covers": "PhilHealth employee and employer contributions"
+      "covers": "PhilHealth employee and employer contributions",
+      "covers_rules": ["PHIC-EE", "PHIC-ER"]
     },
     {
       "form": "MCRF",
       "authority": "Pag-IBIG",
       "name": "Monthly Contribution Remittance Form",
       "frequency": "monthly",
-      "covers": "Pag-IBIG employee and employer contributions"
+      "covers": "Pag-IBIG employee and employer contributions",
+      "covers_rules": ["HDMF-EE", "HDMF-ER"]
     }
   ],
   "holidays": [

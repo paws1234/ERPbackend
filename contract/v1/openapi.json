@@ -1391,6 +1391,141 @@
         "title": "OrderOut",
         "type": "object"
       },
+      "OrgChartEntryOut": {
+        "description": "One person's place in the hierarchy on the date asked about.",
+        "properties": {
+          "cost_centre": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cost Centre"
+          },
+          "department": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Department"
+          },
+          "depth": {
+            "title": "Depth",
+            "type": "integer"
+          },
+          "manager_number": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Manager Number"
+          },
+          "name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          },
+          "number": {
+            "title": "Number",
+            "type": "string"
+          },
+          "reports": {
+            "title": "Reports",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "number",
+          "depth",
+          "reports"
+        ],
+        "title": "OrgChartEntryOut",
+        "type": "object"
+      },
+      "OrgChartOut": {
+        "description": "The hierarchy on one date: one root, everybody under it, and who is not in the tree.",
+        "properties": {
+          "as_of": {
+            "format": "date",
+            "title": "As Of",
+            "type": "string"
+          },
+          "entries": {
+            "items": {
+              "$ref": "#/components/schemas/OrgChartEntryOut"
+            },
+            "title": "Entries",
+            "type": "array"
+          },
+          "root_number": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Root Number"
+          },
+          "unplaced": {
+            "items": {
+              "$ref": "#/components/schemas/OrgChartUnplacedOut"
+            },
+            "title": "Unplaced",
+            "type": "array"
+          }
+        },
+        "required": [
+          "as_of",
+          "entries",
+          "unplaced"
+        ],
+        "title": "OrgChartOut",
+        "type": "object"
+      },
+      "OrgChartUnplacedOut": {
+        "description": "Somebody the tree cannot draw \u2014 never placed, or their manager is not a live employee.",
+        "properties": {
+          "name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          },
+          "number": {
+            "title": "Number",
+            "type": "string"
+          }
+        },
+        "required": [
+          "number"
+        ],
+        "title": "OrgChartUnplacedOut",
+        "type": "object"
+      },
       "PageOut": {
         "properties": {
           "items": {
@@ -6075,6 +6210,129 @@
         "summary": "Convert Opportunity Card",
         "tags": [
           "sales"
+        ]
+      }
+    },
+    "/api/v1/org-chart": {
+      "get": {
+        "description": "The reporting hierarchy on `on`, including the people it cannot place.\n\nThe date is stated rather than assumed to be today, so the same request draws the\ncurrent structure and any past one. Fields a role may not read are **absent** from the\npayload rather than nulled: the restrictions of both entities the chart reads are read\nonce, not once per employee, and the response is returned unfiltered by a model for\nthat reason (a model's defaults would put a null back where a field was withheld).",
+        "operationId": "org_chart_view_api_v1_org_chart_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "on",
+            "required": true,
+            "schema": {
+              "format": "date",
+              "title": "On",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-company-id",
+            "required": true,
+            "schema": {
+              "title": "X-Company-Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-actor",
+            "required": false,
+            "schema": {
+              "default": "unknown",
+              "title": "X-Actor",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OrgChartOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The request could not be understood"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The caller is not identified"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The caller may not do this"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The company, document or route does not exist"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The request clashes with one already made"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The request did not match the contract, or a domain rule refused it"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The platform failed unexpectedly"
+          }
+        },
+        "summary": "Org Chart View",
+        "tags": [
+          "hr"
         ]
       }
     },

@@ -254,6 +254,18 @@ def _workflow(session: Session, *, company_id: uuid.UUID, doc_type: str) -> Appr
     return workflow
 
 
+def require_chain(
+    session: Session, *, company_id: uuid.UUID, doc_type: str
+) -> ApprovalWorkflow:
+    """The chain for a document type, or a refusal.
+
+    The same answer as :func:`start_approval` gives, asked **before** the document is written:
+    a caller that routes a request it has already inserted leaves half a document behind when
+    no chain is configured, and a refusal should write nothing.
+    """
+    return _workflow(session, company_id=company_id, doc_type=doc_type)
+
+
 def chain_for(session: Session, workflow: ApprovalWorkflow, amount: Any) -> list[ApprovalLevel]:
     """The approvals a document of `amount` needs, in order.
 

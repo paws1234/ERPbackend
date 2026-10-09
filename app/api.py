@@ -216,6 +216,8 @@ from app.pos.shifts import (
     open_shift,
     PosShift,
 )
+from app.hr.employees import EMPLOYEE_ENTITY
+from app.hr.org import org_chart
 from app.security import (
     AccessDenied,
     hidden_fields,
@@ -3476,6 +3478,98 @@ def pos_reconciliation(
     return PosReportOut(
         report=_jsonable(
             reconcile_pos(session, company_id=context.company_id, on=on, terminal=terminal)
+        )
+    )
+
+
+
+# --- T-5.EMP.02: the org chart ------------------------------------------------
+# The phase's one frontend consumer: the hierarchy is modelled in `app/hr/org.py`, and
+# this is the read the chart screen draws from. Read-only on purpose — placing somebody is
+# a reorganisation, and T-5.EMP.03 owns the movements that record one.
+
+
+class OrgChartEntryOut(BaseModel):
+    """One person's place in the hierarchy on the date asked about."""
+
+    number: str
+    name: str | None = None
+    manager_number: str | None = None
+    department: str | None = None
+    cost_centre: str | None = None
+    # 1 for the root, 2 for those reporting to it, and so on — what the chart indents by.
+    depth: int
+    reports: int
+
+
+class OrgChartUnplacedOut(BaseModel):
+    """Somebody the tree cannot draw — never placed, or their manager is not a live employee."""
+
+    number: str
+    name: str | None = None
+
+
+class OrgChartOut(BaseModel):
+    """The hierarchy on one date: one root, everybody under it, and who is not in the tree."""
+
+    as_of: date
+    root_number: str | None = None
+    entries: list[OrgChartEntryOut]
+    unplaced: list[OrgChartUnplacedOut]
+
+
+@app.get(f"{BASE}/org-chart", response_model=OrgChartOut, tags=["hr"])
+def org_chart_view(on: date, context: Context) -> JSONResponse:
+    """The reporting hierarchy on `on`, including the people it cannot place.
+
+    The date is stated rather than assumed to be today, so the same request draws the
+    current structure and any past one. Fields a role may not read are **absent** from the
+    payload rather than nulled: the restrictions of both entities the chart reads are read
+    once, not once per employee, and the response is returned unfiltered by a model for
+    that reason (a model's defaults would put a null back where a field was withheld).
+    """
+    session = context.session
+    require(
+        session,
+        company_id=context.company_id,
+        subject=context.actor,
+        capability="employee.read",
+        entity=EMPLOYEE_ENTITY,
+    )
+    hidden_employee = hidden_fields(
+        session,
+        company_id=context.company_id,
+        subject=context.actor,
+        entity=EMPLOYEE_ENTITY,
+    )
+    hidden_placement = hidden_fields(
+        session,
+        company_id=context.company_id,
+        subject=context.actor,
+        entity="org_placement",
+    )
+    chart = org_chart(session, company_id=context.company_id, on=on)
+    return JSONResponse(
+        content=_jsonable(
+            {
+                **chart,
+                "entries": [
+                    {
+                        field: value
+                        for field, value in entry.items()
+                        if field not in hidden_employee and field not in hidden_placement
+                    }
+                    for entry in chart["entries"]
+                ],
+                "unplaced": [
+                    {
+                        field: value
+                        for field, value in row.items()
+                        if field not in hidden_employee
+                    }
+                    for row in chart["unplaced"]
+                ],
+            }
         )
     )
 

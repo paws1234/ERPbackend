@@ -31,6 +31,7 @@ from decimal import Decimal
 
 from sqlalchemy import (
     CheckConstraint,
+    Integer,
     ForeignKey,
     Numeric,
     String,
@@ -102,6 +103,11 @@ class Item(SoftDeleteMixin, Base):
     # The standard cost, where the company's costing method is Standard Cost
     # (T-1.INV.04 owns the method and refuses to value without this).
     standard_cost: Mapped[Decimal | None] = mapped_column(Numeric(20, 6))
+    # How long it takes to obtain this item — days, for a purchased one — read by the
+    # MRP engine (T-4.MRP.01) to place a planned order early enough. Zero is a real
+    # figure (something on the shelf today) and the column's default, so nothing that
+    # was stated before this column existed changes meaning.
+    lead_time_days: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
 
     variants: Mapped[list[ItemVariant]] = relationship(back_populates="item")
     barcodes: Mapped[list[ItemBarcode]] = relationship(back_populates="item")
@@ -214,6 +220,7 @@ def create_item(
     base_uom: str,
     traceability_mode: str,
     standard_cost: Decimal | None = None,
+    lead_time_days: int = 0,
 ) -> Item:
     """Create one item, stating how it is tracked — the mode has no default."""
     if session.scalar(
@@ -227,6 +234,7 @@ def create_item(
         base_uom=str(base_uom).strip(),
         traceability_mode=_checked_mode(traceability_mode),
         standard_cost=standard_cost,
+        lead_time_days=int(lead_time_days),
     )
     session.add(item)
     session.flush()

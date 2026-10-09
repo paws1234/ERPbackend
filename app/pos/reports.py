@@ -177,21 +177,29 @@ def _voided_sales(
     return list(session.scalars(statement.order_by(PosSale.number)))
 
 
-def shift_report(session: Session, shift: PosShift) -> dict:
+def shift_report(session: Session, shift: PosShift, *, on: date | None = None) -> dict:
     """The Z-Report for one shift: sales, tax, tenders, voids, refunds and the drawer.
 
     Every figure is the shift's own totals (T-3.POS.03's `shift_totals`), so a
     Z-Report and a shift cannot disagree about what the shift took — and the drawer
     section is the closing count the shift recorded, with its variance and reason.
+
+    `on` asks for the shift's **slice of one day** rather than its whole life: the day
+    report takes its shifts that way, so a till left trading past midnight is reported
+    on the day it traded instead of being moved to a bucket it did not come from.
     """
-    totals = shift_totals(session, shift)
+    totals = shift_totals(session, shift, on=on)
     abandoned = abandoned_baskets(
-        session, company_id=shift.company_id, on=shift.opened_on, terminal=shift.terminal
+        session,
+        company_id=shift.company_id,
+        on=on or shift.opened_on,
+        terminal=shift.terminal,
     )
     report = {
         "shift": str(shift.id),
         "terminal": shift.terminal,
         "opened_on": shift.opened_on,
+        "on": on,
         "closed_at": shift.closed_at,
         "status": shift.status,
         **{key: totals[key] for key in
@@ -231,10 +239,12 @@ def shift_report(session: Session, shift: PosShift) -> dict:
 
 
 def _day_sales(session: Session, *, company_id: uuid.UUID, on: date) -> list[PosSale]:
-    """The sales the day rang up, oldest first — the rows every bucket is cut from.
+    """The sales the day rang up, oldest first — what the shiftless bucket is cut from.
 
     A sale later refunded is still one the day rang up (its entry says so), so a refund
-    made tomorrow cannot take it out of today's figures.
+    made tomorrow cannot take it out of today's figures. The day's *shifts* read their
+    own sales through `shift_totals`, which is what keeps the day the sum of the shift
+    reports.
     """
     return list(
         session.scalars(
@@ -250,11 +260,13 @@ def _day_sales(session: Session, *, company_id: uuid.UUID, on: date) -> list[Pos
 
 
 def _bucket(sales: list[PosSale], movements, refunds: list[PosSale]) -> dict:
-    """One shift's — or the shiftless till's — worth of figures, from its own rows.
+    """The shiftless till's worth of figures, from its own rows.
 
-    `refunds` are the sales **refunded** on this day by this terminal: they are not
-    sales of the day (the day's sales are the ones it rang up), but the cash they hand
-    back leaves this drawer, so the drawer's own expectation carries them.
+    A **shift's** row is not built here: it is the shift's own report for the day
+    (:func:`_shift_bucket`). `refunds` are the sales **refunded** on this day where no
+    shift of the day was trading: they are not sales of the day (the day's sales are the
+    ones it rang up), but the cash they hand back leaves this drawer, so the drawer's
+    own expectation carries them.
     """
     state = drawer_state(sales, movements)
     refunded = refund_cash(refunds)
@@ -274,78 +286,77 @@ def _bucket(sales: list[PosSale], movements, refunds: list[PosSale]) -> dict:
     }
 
 
-def day_report(session: Session, *, company_id: uuid.UUID, on: date) -> dict:
-    """The day's Z-Report: every shift of that day, and the shiftless trade beside them.
+def _shift_bucket(report: dict, shift: PosShift) -> dict:
+    """One shift's day, flattened from that shift's own report — the same figures.
 
-    A day's sales are the sales it **rang up** — refunded or not, because the till took
-    the money — and its refunds are the sales it **refunded**, whatever day they were
-    sold on: the cash going back out belongs to the drawer it left.
-
-    The day's figures are the **sum of the shifts' own numbers**, computed from the
-    same rows, so "equal to the sum" is arithmetic rather than a rounding promise. The
-    trade that happened on a till with no shift (a company that manages no drawers) —
-    and any sale whose shift is not one of the day's — gets its own bucket rather than
-    being folded into one of the shifts or dropped.
+    Nothing is recounted here: the row **is** the shift's Z-Report for the day
+    (:func:`shift_report` with `on`), so "the day is the sum of the shift reports" is
+    arithmetic over one function rather than two implementations kept agreeing by hand.
     """
-    shifts = [
-        shift
-        for shift in
+    return {
+        "shift": report["shift"],
+        "terminal": report["terminal"],
+        "status": report["status"],
+        "opened_on": report["opened_on"],
+        "sales": report["sales"],
+        "net": report["net"],
+        "tax": report["tax"],
+        "gross": report["gross"],
+        "tenders": report["tenders"],
+        "movements": report["movements"],
+        "change_paid": report["change_paid"],
+        "opening_float": report["opening_float"],
+        "expected_cash": report["expected_cash"],
+        "refunded": report["refunds"]["value"],
+        "refunds": report["refunds"]["sales"],
+        "voids": report["voids"],
+        "counted": shift.counted_cash,
+        "variance": shift.variance,
+    }
+
+
+def day_report(session: Session, *, company_id: uuid.UUID, on: date) -> dict:
+    """The day's Z-Report: the day's shift reports added together, exactly.
+
+    **Cross-midnight ownership.** A shift belongs to a day when it **opened** that day
+    or when it **traded** on it — sold, moved cash, or was trading when a refund was
+    handed back. Each of the day's shifts then contributes its own report *for that
+    day* (``shift_report(shift, on=day)``), which is what makes the day exactly the sum
+    of those reports: a sale rung after midnight on a till whose shift is still open is
+    reported on the day it was sold, in that shift's own line, instead of being moved
+    into the bucket for the trade no shift took while the shift's own Z-Report counts
+    it. The opening float rides on the day the shift opened, so a shift that spans
+    midnight does not state the same float on two days.
+
+    The trade of a till with **no** shift at all — a company that manages no drawers —
+    is its own bucket, and so is the cash of a terminal none of the day's shifts was
+    trading.
+    """
+    sales_today = _day_sales(session, company_id=company_id, on=on)
+    movements_today = movements_for(session, company_id=company_id, on=on)
+    refunds = refunds_on(session, company_id=company_id, on=on)
+    traded = {sale.shift_id for sale in sales_today if sale.shift_id is not None} | {
+        row.shift_id for row in movements_today if row.shift_id is not None
+    }
+    every_shift = list(
         session.scalars(
             select(PosShift)
-            .where(PosShift.company_id == company_id, PosShift.opened_on == on)
+            .where(PosShift.company_id == company_id)
             .order_by(PosShift.terminal, PosShift.opened_at)
         )
+    )
+    shifts = [shift for shift in every_shift if shift.opened_on == on or shift.id in traded]
+    own_terminals = {shift.terminal for shift in shifts}
+    per_shift = [
+        _shift_bucket(shift_report(session, shift, on=on), shift) for shift in shifts
     ]
-    day_sales = _day_sales(session, company_id=company_id, on=on)
-    refunds = refunds_on(session, company_id=company_id, on=on)
-    day_movements = movements_for(session, company_id=company_id, on=on)
-    claimed = {shift.id for shift in shifts}
-    orphans = [sale for sale in day_sales if sale.shift_id not in claimed]
-    # Every sale of the day lands in exactly one bucket: its own shift's, or the one for
-    # the trade the day's shifts did not take — including a sale stamped with a shift
-    # that opened on another day (a till left open past midnight), which bucketing by
-    # the shift's own opening day would have left in neither bucket and so dropped from
-    # the day's figures while it sits in the ledger and in that shift's report.
-    per_shift = []
-    for shift in shifts:
-        sales = [sale for sale in day_sales if sale.shift_id == shift.id]
-        # The shift's movements **on this day**: a shift left open past midnight moves
-        # cash on the next day too, and that next day's report is where it belongs —
-        # counting the whole shift's history on the day it opened would add tomorrow's
-        # cash to today and take it out of tomorrow.
-        shift_day_movements = [
-            row
-            for row in day_movements
-            if row.shift_id == shift.id
-        ]
-        bucket = _bucket(
-            sales,
-            shift_day_movements,
-            [sale for sale in refunds if sale.terminal == shift.terminal],
-        )
-        bucket.update(
-            {
-                "shift": str(shift.id),
-                "terminal": shift.terminal,
-                "status": shift.status,
-                "opening_float": Decimal(shift.opening_float).quantize(MONEY_SCALE),
-                "counted": shift.counted_cash,
-                "variance": shift.variance,
-            }
-        )
-        bucket["expected_cash"] = (
-            bucket["expected_cash"] + Decimal(shift.opening_float)
-        ).quantize(MONEY_SCALE)
-        per_shift.append(bucket)
-    shiftless_sales = sorted(orphans, key=lambda sale: sale.number)
-    traded = {shift.terminal for shift in shifts}
     shiftless = _bucket(
-        shiftless_sales,
-        [row for row in day_movements if row.shift_id not in claimed],
+        [sale for sale in sales_today if sale.shift_id is None],
+        [row for row in movements_today if row.shift_id is None],
         # Refunds made where no shift was trading that day: the till with no drawer
-        # management its own self, and a refund rung on a terminal whose shift is not
+        # management its own self, and a refund rung on a terminal whose shifts are not
         # one of the day's.
-        [sale for sale in refunds if sale.terminal not in traded],
+        [sale for sale in refunds if sale.terminal not in own_terminals],
     )
     abandoned = abandoned_baskets(session, company_id=company_id, on=on)
     day = {

@@ -268,10 +268,18 @@ def _copy_requirements(session: Session, *, order: WorkOrder, bom) -> None:
     for row in plan["levels"]:
         item = _item_by_sku(session, company_id=order.company_id, sku=row["item"])
         existing = _requirement_for(session, order=order, item_id=item.id)
-        if existing is not None:  # the same component at two levels adds up, one row
+        if existing is not None:
+            # The same component at two levels adds up into one row, and the row keeps
+            # the **shallowest** level it was seen at: a component this job takes itself
+            # is never filed away under a sub-assembly that also uses it — which would
+            # hide it from `direct_requirements` and let a receipt complete without it.
+            # The quantity stays the total for the job, both uses together.
             existing.quantity_required = (
                 Decimal(existing.quantity_required) + Decimal(row["quantity"])
             ).quantize(SCALE)
+            if int(row["level"]) < int(existing.level):
+                existing.level = int(row["level"])
+                existing.path = row["path"]
             continue
         session.add(
             WorkOrderRequirement(
@@ -345,6 +353,11 @@ def direct_requirements(
     components' own work orders carry those rows. Drawing them here as well would consume
     the same material twice — 55 tubes for 10 frames, and 55 again for the bicycles that
     took the frames.
+
+    A component the job takes directly *and* that a sub-assembly also uses is one row at
+    level 1 carrying both quantities (:func:`_copy_requirements`), so it is counted here;
+    that row's figure is the job's total use of it, which is what a receipt insists was
+    drawn rather than the direct share alone.
     """
     return [row for row in requirements_of(session, order) if int(row.level) == 1]
 

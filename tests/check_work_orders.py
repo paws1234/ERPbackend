@@ -3,7 +3,7 @@
     DATABASE_URL=******localhost:5432/erpv1 \
         python tests/check_work_orders.py
 
-Green on all five:
+Green on all six:
 
 1. a work order raised from a released BOM has **every requirement the explosion has**,
    up-lifted at every level, and says so in its own levels and paths
@@ -15,6 +15,9 @@ Green on all five:
    refused with the steps that do follow
 5. every move is **on the audit trail** with the before and the after, and the order's
    own requirement list reconciles to the explosion of the pin
+6. a component the item takes **both directly and inside a sub-assembly** is one row at
+   the shallowest level, carrying both quantities, so `direct_requirements` — what the
+   job draws and a receipt insists on — cannot lose it under the sub-assembly
 """
 
 from __future__ import annotations
@@ -50,6 +53,7 @@ from app.manufacturing.work_orders import (  # noqa: E402
     advance,
     bom_of,
     create_work_order,
+    direct_requirements,
     missing_route,
     reconcile_requirements,
     requirements_of,
@@ -267,6 +271,47 @@ def main() -> int:
             f"5. the trail holds {len(trail)} status moves for {order.number} —"
             f" {statuses} — recorded by the table's own trigger, with the requirement"
             f" list still matching v{bom_of(session, order).version}"
+        )
+
+        # 6 — a component used both directly and under a sub-assembly
+        # A tricycle takes a frame and, directly, a tube — and the frame is built from
+        # tubes too, so the tube is required twice over. Both uses are one row (the
+        # totals-per-item list T-4.WO.01 keeps), and that row stays at level 1: filed
+        # under the frame instead, the job's own tube would be invisible to
+        # `direct_requirements` and a receipt could complete without it.
+        tricycle = item("TRICYCLE")
+        session.commit()
+        tricycle_bom = create_bom(session, company_id=COMPANY, item=tricycle)
+        add_line(session, tricycle_bom, item=frame, quantity="1")
+        add_line(session, tricycle_bom, item=tube, quantity="1")
+        release(session, tricycle_bom)
+        session.commit()
+        shared = create_work_order(session, company_id=COMPANY, item=tricycle,
+                                   quantity="10", number="WO-6", created_on=DAY)
+        session.commit()
+        rows = {
+            session.get(type(frame), row.item_id).sku: (row.level, Decimal(row.quantity_required))
+            for row in requirements_of(session, shared)
+        }
+        # 10 × 1 frame; 10 × 3 tubes through the frame + 10 × 1 taken directly = 40; and
+        # each of those 40 tubes is two billets, so the billets = 80, at level 2 (the
+        # shallowest of the two ways this job needs them).
+        assert rows == {
+            "FRAME": (1, Decimal("10.000000")),
+            "TUBE": (1, Decimal("40.000000")),
+            "ALLOY": (2, Decimal("80.000000")),
+        }, rows
+        drawn = {
+            session.get(type(frame), row.item_id).sku: Decimal(row.quantity_required)
+            for row in direct_requirements(session, shared)
+        }
+        assert drawn == {"FRAME": Decimal("10.000000"), "TUBE": Decimal("40.000000")}, drawn
+        print(
+            f"6. a tricycle takes {rows['FRAME'][1]} frames and, directly, a tube — and a"
+            f" frame takes three tubes, so {shared.number} requires"
+            f" {rows['TUBE'][1]} tubes: one row, at level {rows['TUBE'][0]}, carrying both"
+            f" uses. What the job draws ({drawn}) therefore names the tube, and a receipt"
+            " cannot complete with the job's own component still undrawn"
         )
 
     print("\ncheck_work_orders: all assertions green")

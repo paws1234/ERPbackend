@@ -48,6 +48,7 @@ from app.localization import (  # noqa: E402
     PackError,
     accounts_by_class,
     bank_file_format,
+    calendar_years,
     coa_template,
     company_template,
     fiscal_year_start,
@@ -96,7 +97,7 @@ def main() -> int:
 
     # 2 — the pack loads, and its CoA is import-ready
     pack = load_pack(MARKET)
-    assert pack["market"] == MARKET and pack["version"] == "1.0.0", pack
+    assert pack["market"] == MARKET and len(pack["version"].split(".")) == 3, pack
     accounts = coa_template(MARKET)
     assert len(accounts) >= 40, f"the CoA template is thin: {len(accounts)} accounts"
     codes = [account["code"] for account in accounts]
@@ -145,7 +146,10 @@ def main() -> int:
     assert len(statutory_rules(MARKET, "contribution")) >= 6
     assert len(statutory_rules(MARKET, "withholding")) >= 2
     assert len(pack["statutory_reports"]) >= 7
-    assert len(holidays(MARKET, 2026)) == len(pack["holidays"]) >= 15
+    assert sum(len(holidays(MARKET, year)) for year in calendar_years(MARKET)) == len(
+        pack["holidays"]
+    ) >= 15
+    assert len(holidays(MARKET, 2026)) >= 15
     assert bank_file_format(MARKET)["columns"]
     print(
         f"the pack carries {len(tax_rules(MARKET))} tax rules, "

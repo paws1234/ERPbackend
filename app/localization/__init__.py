@@ -8,13 +8,20 @@ placeholder, and this module loads, validates and reports on it. A new market is
 a new directory, and changing a rate is an edit to that pack rather than a
 release of the platform.
 
-Two rules the loader enforces rather than documents:
+Three rules the loader enforces rather than documents:
 
 * **A pack is validated before it is used.** :func:`load_pack` refuses a pack
   whose account codes repeat, whose parents do not exist, whose classes are
   unknown, whose tax rates are outside 0–100 %, whose statutory rules have no
   basis, whose holiday list is not dated, or whose statutory report collects a
   rule the pack does not state — so a broken pack cannot reach a company's books.
+* **A pack that loads can still leave a gap.** Empty sections, a deduction no
+  form collects and a calendar that stops before the year being run are not
+  entry-level mistakes, so :func:`load_pack` cannot see them: :func:`completeness`
+  enumerates all six sections and names each gap, :func:`require_complete` refuses
+  a company creation while one is left, and :func:`holidays` refuses a year the
+  calendar does not cover rather than answering with an empty list (an empty
+  calendar reads as "every day is a working day").
 * **Nothing is assumed on the market's behalf.** The Philippines' fiscal year
   start is still undecided in plan §8 (2026-09-17), so the pack carries
   `fiscal_year_start: null` and :func:`fiscal_year_start` refuses to answer until
@@ -32,6 +39,7 @@ from __future__ import annotations
 
 import json
 import uuid
+from datetime import date
 from decimal import Decimal
 from pathlib import Path
 
@@ -227,8 +235,33 @@ def statutory_reports(market: str) -> list[dict]:
     return list(load_pack(market)["statutory_reports"])
 
 
+def calendar_years(market: str) -> list[int]:
+    """The years the pack's holiday calendar covers, in order."""
+    return sorted(
+        {
+            int(holiday["date"][:4])
+            for holiday in load_pack(market)["holidays"]
+            if holiday.get("date")
+        }
+    )
+
+
 def holidays(market: str, year: int) -> list[dict]:
-    """One year's non-working days, as the pack states them."""
+    """One year's non-working days, as the pack states them.
+
+    A year the calendar does not cover is **refused**, not answered with an empty
+    list: an empty calendar reads as "every day is a working day", so a rostering,
+    attendance or payroll question about an uncovered year would be answered
+    silently wrong rather than naming the pack that has to be extended.
+    """
+    covered = calendar_years(market)
+    if year not in covered:
+        _refuse(
+            f"{market}: the holiday calendar covers"
+            f" {', '.join(str(covered_year) for covered_year in covered)} — {year} is not among"
+            " them; extend the pack (and bump its version) rather than treating every day of"
+            " that year as a working day"
+        )
     return [
         dict(holiday)
         for holiday in load_pack(market)["holidays"]
@@ -239,6 +272,178 @@ def holidays(market: str, year: int) -> list[dict]:
 def bank_file_format(market: str) -> dict:
     """The bank's transfer file layout, so AP payments (Phase 2) can write it."""
     return dict(load_pack(market)["bank_file_format"])
+
+
+def completeness(market: str, *, on: date | None = None) -> dict:
+    """The pack's completeness checklist: each of §3's six sections, what it holds, any gap.
+
+    `load_pack` refuses a pack that is *malformed* — a repeated account code, a rate outside
+    0–100 %, an undated holiday. This asks the other question, the one a pack that loads can
+    still fail: a section that holds nothing, a deduction no form collects, a calendar that
+    stops before the year being run. Each is named with the entry that leaves it, so the answer
+    is a work list rather than a verdict, and :func:`require_complete` is the same list turned
+    into a refusal.
+
+    A gap is a missing *statement*, never a missing opinion: the fiscal year start is reported
+    as undecided because the pack says so on purpose (plan §8), and a rule of kind `loan` is
+    not collected by a form because a loan repayment is not remitted to a bureau — neither is
+    counted against the pack.
+    """
+    today = date.today() if on is None else on
+    pack = load_pack(market)
+    sections: dict[str, dict] = {}
+
+    def section(name: str, *, holds: int, detail: str, gaps: list[str]) -> None:
+        sections[name] = {"holds": holds, "detail": detail, "gaps": gaps}
+
+    # The chart of accounts: the five classes of §2.1 must each hold something, or the
+    # company imports a chart with no revenue, no equity or no expense side at all.
+    accounts = pack["coa_template"]["accounts"]
+    classes = {account["class"] for account in accounts}
+    section(
+        "coa_template",
+        holds=len(accounts),
+        detail=f"{len(accounts)} accounts in {len(classes)} of the 5 classes",
+        gaps=[f"the chart of accounts states no {name} account" for name in ACCOUNT_CLASSES
+              if name not in classes],
+    )
+
+    # Tax rules: the rate and the document types the rule applies to are validated in
+    # `_validate`; what is worth stating is a rule that names no posting account, because a
+    # tax that cannot be posted is a tax somebody posts by hand.
+    rules = pack["tax_rules"]
+    document_types = sorted({kind for rule in rules for kind in rule["applies_to"]})
+    unpostable = [rule["code"] for rule in rules if not rule.get("account")]
+    section(
+        "tax_rules",
+        holds=len(rules),
+        detail=(
+            f"{len(rules)} rules over {len(document_types)} document types"
+            + (f"; naming no posting account: {', '.join(unpostable)}" if unpostable else "")
+        ),
+        gaps=[],
+    )
+
+    # Statutory deductions: a contribution or a withholding that no form collects is a
+    # deduction withheld with nowhere to remit it. A loan repayment is not remitted at all.
+    statutory = pack["statutory_rules"]
+    reports = pack["statutory_reports"]
+    collected = {code for report in reports for code in report.get("covers_rules", [])}
+    uncollected = [
+        rule["code"] for rule in statutory
+        if rule["kind"] != "loan" and rule["code"] not in collected
+    ]
+    kinds = sorted({rule["kind"] for rule in statutory})
+    section(
+        "statutory_rules",
+        holds=len(statutory),
+        detail=(
+            f"{len(statutory)} rules of kinds {', '.join(kinds)};"
+            f" {len(collected)} collected by a form"
+        ),
+        gaps=[f"the statutory rule {code} is collected by no form" for code in uncollected],
+    )
+
+    # Statutory reports: which form goes where, how often, and what it collects. A form the
+    # pack feeds from payroll says so by naming the rules (`covers_rules`), which is how
+    # T-5.PAY.04 tells a payroll return from somebody else's.
+    payroll_forms = [report["form"] for report in reports if report.get("covers_rules")]
+    authorities = sorted({report["authority"] for report in reports})
+    section(
+        "statutory_reports",
+        holds=len(reports),
+        detail=(
+            f"{len(reports)} forms from {', '.join(authorities)};"
+            f" {len(payroll_forms)} fed from payroll"
+        ),
+        gaps=[f"the form {report['form']} states no frequency" for report in reports
+              if not report.get("frequency")],
+    )
+
+    # The holiday calendar: it must reach the next year from the one being run. A calendar
+    # that stops early is not visibly wrong — every lookup in the uncovered year comes back
+    # empty, and an empty calendar says every day is a working day.
+    holidays_stated = pack["holidays"]
+    covered = calendar_years(market)
+    through = max(covered[-1], today.year + 1)
+    missing_years = [
+        year for year in range(min(covered[0], today.year), through + 1) if year not in covered
+    ]
+    dates = [day["date"] for day in holidays_stated]
+    repeated = sorted({day for day in dates if dates.count(day) > 1})
+    section(
+        "holidays",
+        holds=len(holidays_stated),
+        detail=(
+            f"{len(holidays_stated)} days over {', '.join(str(year) for year in covered)}"
+            f" ({sum(1 for day in holidays_stated if day['type'] == 'regular')} regular,"
+            f" {sum(1 for day in holidays_stated if day['type'] == 'special')} special)"
+        ),
+        gaps=(
+            [f"the holiday calendar holds no {year} day, and the run date is {today.isoformat()}"
+             for year in missing_years]
+            + [f"the holiday calendar states {day} twice" for day in repeated]
+        ),
+    )
+
+    # The bank file format: the columns a payment run writes, and what it cannot write
+    # without (a file with no delimiter has no fields at all).
+    bank = pack["bank_file_format"]
+    columns = bank["columns"]
+    section(
+        "bank_file_format",
+        holds=len(columns),
+        detail=(
+            f"{bank['name']}: {len(columns)} columns"
+            f" ({sum(1 for column in columns if column.get('required'))} required),"
+            f" {bank.get('encoding')}"
+        ),
+        gaps=(
+            [f"the bank file format's column {index} is unnamed" for index, column in
+             enumerate(columns, start=1) if not column.get("name")]
+            + ([] if bank.get("delimiter") else ["the bank file format states no delimiter"])
+            + ([] if any(column.get("required") for column in columns)
+               else ["the bank file format requires no column"])
+        ),
+    )
+
+    # A section that holds nothing is the gap the checklist exists for: it is not a
+    # malformed entry, it is a company created with nothing to import.
+    for name, state in sections.items():
+        if state["holds"] == 0:
+            state["gaps"].insert(0, "the section holds nothing")
+
+    gaps = [
+        f"{name}: {gap}" for name, state in sections.items() for gap in state["gaps"]
+    ]
+    return {
+        "market": market,
+        "version": pack["version"],
+        "as_of": pack.get("as_of"),
+        "currency": pack["currency"],
+        "fiscal_year_start": pack["fiscal_year_start"],
+        "on": today.isoformat(),
+        "checklist": list(sections),
+        "sections": sections,
+        "years": covered,
+        "gaps": gaps,
+    }
+
+
+def require_complete(market: str, *, on: date | None = None) -> dict:
+    """The checklist, refused when it leaves a gap — the gate a fresh company passes.
+
+    Called by :func:`company_template`, so a company is not created in a market whose pack
+    leaves a section empty, a deduction uncollected or the calendar short: a gap that reaches
+    a company's books is not visibly a gap at all.
+    """
+    report = completeness(market, on=on)
+    if report["gaps"]:
+        _refuse(
+            f"{market}: the pack leaves {len(report['gaps'])} gap(s) — "
+            + "; ".join(report["gaps"])
+        )
+    return report
 
 
 def amount_from(rule: dict, *, basis: Decimal) -> Decimal:
@@ -260,9 +465,12 @@ def company_template(
     Returned, not applied: creating the company master is T-0.CORE.03's business
     and importing the CoA is T-1.ACCT.01's. The fiscal year start is the pack's
     or the caller's confirmed month, and it is asked for here so that creating a
-    company in this market cannot quietly skip the question.
+    company in this market cannot quietly skip the question — and the pack's own
+    completeness checklist is required first, so a company is not created in a
+    market whose pack leaves a section empty or its calendar short.
     """
     pack = load_pack(market)
+    checklist = require_complete(market)
     return {
         "company_id": str(company_id),
         "market": pack["market"],
@@ -276,5 +484,9 @@ def company_template(
         "statutory_pack": [rule["code"] for rule in pack["statutory_rules"]],
         "statutory_reports": [report["form"] for report in pack["statutory_reports"]],
         "holidays": len(pack["holidays"]),
+        "holiday_years": checklist["years"],
+        "pack_sections": {
+            name: state["holds"] for name, state in checklist["sections"].items()
+        },
         "bank_file_format": pack["bank_file_format"]["name"],
     }

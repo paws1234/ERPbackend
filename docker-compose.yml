@@ -2,6 +2,21 @@
 #
 #   POSTGRES_PASSWORD=... docker compose up -d
 #
+# The database the stack brings up is **empty**: the containers are healthy, `/api/v1/health`
+# answers, and every other route refuses for want of tables. The application is installed into
+# it by its own command — run once, against the backend's image, from this directory:
+#
+#   POSTGRES_PASSWORD=... docker compose up -d --wait
+#   docker compose run --rm backend python -m app.bootstrap \
+#       --company-code ACME --company-name "Acme Trading" --market philippines \
+#       --fiscal-year-start-month 1 --admin-subject you@example.com
+#
+# It prints the company id, which is the `COMPANY_ID` the frontend is given below. Running it a
+# second time for the same company is refused rather than half-applied; a second company in the
+# same install is the same command with another code. `--market` decides the chart of accounts
+# and the tax rules; `--fiscal-year-start-month` is required wherever the market's pack leaves
+# the fiscal calendar open (plan §8), and the pack refuses to guess it.
+#
 # The applications are consumed as **images** (`BACKEND_IMAGE` / `FRONTEND_IMAGE`
 # choose which), so bringing the stack up needs neither application repository
 # checked out — only this file. For local builds use the development override:

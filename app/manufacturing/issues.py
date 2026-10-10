@@ -154,6 +154,20 @@ def requirement_for(
     )
 
 
+def _batch(session: Session, *, item: Item, code: str | None):
+    """The batch named for this issue, opened nowhere: a batch must have arrived first."""
+    from app.stock.batches import batch_by_code
+
+    return None if code is None else batch_by_code(session, item=item, code=str(code).strip())
+
+
+def _serial(session: Session, *, item: Item, code: str | None):
+    """The unit named for this issue, which must already be registered."""
+    from app.stock.serials import serial_by_code
+
+    return None if code is None else serial_by_code(session, item=item, code=str(code).strip())
+
+
 def issues_of(session: Session, order: WorkOrder) -> list[WorkOrderIssue]:
     """Every issue on the order, oldest first.
 
@@ -221,6 +235,8 @@ def issue_material(
     override: bool = False,
     override_reason: str | None = None,
     tolerance_percent: Any = ISSUE_TOLERANCE_PERCENT,
+    batch_code: str | None = None,
+    serial_code: str | None = None,
 ) -> WorkOrderIssue:
     """Issue one requirement's material to the order: stock out, WIP in.
 
@@ -229,6 +245,12 @@ def issue_material(
     row is written first so the stock movement can name it as its document, and the
     movement's value — the costing method's answer — is what this row and the WIP
     posting carry.
+
+    `batch_code`/`serial_code` name **which** lot or unit was consumed, and the movement
+    stores it (T-6.TRACE.03): tracing a finished good back to its material needs the
+    material's own identity on the ledger, and a tracked item cannot be issued without it.
+    Naming one is the caller's decision — the batch that was actually taken off the shelf,
+    not whichever the costing method would have preferred.
     """
     requirement = requirement_for(session, order, item=item)
     given = quantity if isinstance(quantity, Decimal) else Decimal(str(quantity))
@@ -274,6 +296,8 @@ def issue_material(
         source_id=issue_id,
         posting_date=on,
         actor=actor,
+        batch=_batch(session, item=item, code=batch_code),
+        serial=_serial(session, item=item, code=serial_code),
     )
     posted = WorkOrderIssue(
         id=issue_id,

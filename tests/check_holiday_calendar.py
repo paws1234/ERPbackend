@@ -55,10 +55,11 @@ from app.hr.holidays import (  # noqa: E402
 )
 from app.ledger import posting  # noqa: E402,F401 — every check builds the one schema
 from app.ledger.periods import lock_period  # noqa: E402
-from app.localization import load_pack  # noqa: E402
+from app.localization import holidays  # noqa: E402
 
-PACK = load_pack("philippines")
-HOLIDAYS_IN_PACK = len(PACK["holidays"])
+# The pack is the source, so the count is the year's own days rather than the whole file:
+PACK_YEAR = 2026
+HOLIDAYS_IN_PACK = len(holidays("philippines", PACK_YEAR))
 
 
 def _refused(call, expected: str) -> str:

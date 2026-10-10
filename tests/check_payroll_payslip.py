@@ -43,6 +43,7 @@ from app.hr.attendance import record_punch  # noqa: E402
 from app.hr.employees import create_employee, record_contract  # noqa: E402
 from app.hr.shifts import define_shift, roster_employee  # noqa: E402
 from app.ledger import posting  # noqa: E402,F401 — every check builds the one schema
+from app.localization import holidays, load_pack  # noqa: E402
 from app.payroll.components import define_component, load_statutory_components  # noqa: E402
 from app.payroll.engine import (  # noqa: E402
     compute_run,
@@ -256,7 +257,8 @@ def main() -> int:
         # 5 — what it was read from
         assert own["period"] == "2026-06" and own["cutoff_date"] == "2026-06-15"
         assert own["run_revision"] == 1 and own["run_state"] == "computed"
-        assert own["pack_versions"] == "1.0.0" and own["currency"] == "PHP"
+        assert own["pack_versions"] == load_pack("philippines")["version"]
+        assert own["currency"] == "PHP"
         print(
             f"the payslip's earnings add up to the run's gross {ana_line.gross}, its"
             f" deductions to {ana_line.deductions_total} and its net is the difference; the"

@@ -33,7 +33,7 @@ from sqlalchemy.orm import Mapped, Session, mapped_column
 
 from app.db import Base
 from app.ledger.periods import period_is_locked
-from app.localization import load_pack
+from app.localization import holidays, load_pack
 
 # The kinds of holiday a pack states. The Philippines pack uses both words — "regular" for
 # the days the law fixes and "special" for the proclaimed ones — and nothing here depends on
@@ -260,18 +260,22 @@ def seed_calendar(
     """Seed the calendar from a market's pack, for a year or for every year it carries.
 
     The pack is loaded through T-0.LOC.01's loader, so a pack that fails validation never
-    reaches a calendar. Seeding is **idempotent**: a day already stated is left exactly as it
-    is — including one somebody has since renamed, because a re-seed is not an edit — and the
-    function reports only what it added. Days inside a locked month are refused like any
-    other calendar change, so seeding a closed year is not a way round the guard.
+    reaches a calendar — and a year the pack's calendar does not cover is **refused** rather
+    than seeded as a year with no holidays in it. Seeding is **idempotent**: a day already
+    stated is left exactly as it is — including one somebody has since renamed, because a
+    re-seed is not an edit — and the function reports only what it added. Days inside a locked
+    month are refused like any other calendar change, so seeding a closed year is not a way
+    round the guard.
     """
     pack = load_pack(market)
     where = _region(region)
     seeded: list[Holiday] = []
-    for entry in pack.get("holidays") or ():
+    # The year's days come from the pack's own reader, which refuses a year the calendar does
+    # not cover: seeding one would otherwise add nothing at all and leave a year that reads as
+    # having no holidays. No year stated means every year the pack carries.
+    entries = (pack.get("holidays") or ()) if year is None else holidays(market, year)
+    for entry in entries:
         when = _date_or_refuse(entry.get("date"), f"a holiday date in the {market} pack")
-        if year is not None and when.year != year:
-            continue
         if holiday_on(session, company_id=company_id, on=when, region=where) is not None:
             continue
         _refuse_closed_period(

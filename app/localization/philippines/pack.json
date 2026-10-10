@@ -1,13 +1,14 @@
 {
   "market": "philippines",
   "country": "PH",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "currency": "PHP",
   "as_of": "2026-09-17",
   "notes": [
     "Statutory rates are data, not law: they are the pack's stated version and every deployment confirms them with its accountant before use.",
     "Movable observances (Chinese New Year, Eid'l Fitr, Eid'l Adha) are proclaimed year by year and are added by proclamation, not guessed here.",
-    "The fiscal year start is deliberately null: plan §8 leaves it undecided, so it must be confirmed with the pack before a company in this market is created."
+    "The fiscal year start is deliberately null: plan §8 leaves it undecided, so it must be confirmed with the pack before a company in this market is created.",
+    "The holiday calendar carries 2026 and 2027 (1.1.0). The 2027 dates follow the same rules the 2026 set does — the statutory fixed dates, Easter (Maundy Thursday 25 March and Good Friday 26 March 2027) and the last Monday of August (30 August 2027) — so they are derived from the rules rather than proclaimed, and the movable observances above are still added only by proclamation. The calendar must reach the year after the one being run: `holidays(market, year)` refuses an uncovered year rather than answering with an empty list."
   ],
   "fiscal_year_start": null,
   "coa_template": {
@@ -313,7 +314,23 @@
     { "date": "2026-12-24", "name": "Christmas Eve", "type": "special" },
     { "date": "2026-12-25", "name": "Christmas Day", "type": "regular" },
     { "date": "2026-12-30", "name": "Rizal Day", "type": "regular" },
-    { "date": "2026-12-31", "name": "Last Day of the Year", "type": "special" }
+    { "date": "2026-12-31", "name": "Last Day of the Year", "type": "special" },
+    { "date": "2027-01-01", "name": "New Year's Day", "type": "regular" },
+    { "date": "2027-02-25", "name": "EDSA People Power Revolution Anniversary", "type": "special" },
+    { "date": "2027-03-25", "name": "Maundy Thursday", "type": "regular" },
+    { "date": "2027-03-26", "name": "Good Friday", "type": "regular" },
+    { "date": "2027-04-09", "name": "Araw ng Kagitingan", "type": "regular" },
+    { "date": "2027-05-01", "name": "Labor Day", "type": "regular" },
+    { "date": "2027-06-12", "name": "Independence Day", "type": "regular" },
+    { "date": "2027-08-21", "name": "Ninoy Aquino Day", "type": "special" },
+    { "date": "2027-08-30", "name": "National Heroes Day", "type": "regular" },
+    { "date": "2027-11-01", "name": "All Saints' Day", "type": "special" },
+    { "date": "2027-11-30", "name": "Bonifacio Day", "type": "regular" },
+    { "date": "2027-12-08", "name": "Feast of the Immaculate Conception of Mary", "type": "special" },
+    { "date": "2027-12-24", "name": "Christmas Eve", "type": "special" },
+    { "date": "2027-12-25", "name": "Christmas Day", "type": "regular" },
+    { "date": "2027-12-30", "name": "Rizal Day", "type": "regular" },
+    { "date": "2027-12-31", "name": "Last Day of the Year", "type": "special" }
   ],
   "bank_file_format": {
     "name": "Philippines — bank transfer file (comma-separated, credited via PESONet or InstaPay)",

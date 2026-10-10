@@ -64,6 +64,7 @@ from app.manufacturing.work_orders import (
 from app.stock.entries import StockLedgerEntry
 from app.stock.items import Item
 from app.stock.locations import Location
+from app.procurement.receipts import arriving_batch, arriving_serial
 from app.stock.transactions import receive
 
 MONEY = Numeric(20, 6)
@@ -191,6 +192,8 @@ def receive_finished_goods(
     backflush_location: Location | None = None,
     actor: str | None = None,
     tolerance_percent: Any = ISSUE_TOLERANCE_PERCENT,
+    batch_code: str | None = None,
+    serial_code: str | None = None,
 ) -> WorkOrderReceipt:
     """Receive produced quantity into stock, consuming the material it took.
 
@@ -245,6 +248,8 @@ def receive_finished_goods(
         source_type=SOURCE_TYPE,
         source_id=receipt_id,
         posting_date=on,
+        batch=arriving_batch(session, item=item, code=batch_code),
+        serial=arriving_serial(session, item=item, code=serial_code),
     )
     receipt = WorkOrderReceipt(
         id=receipt_id,

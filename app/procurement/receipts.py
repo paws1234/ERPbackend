@@ -23,11 +23,12 @@ so "what is still expected" stops being a guess:
   order was raised at, so stock valuation (T-1.INV.04) receives what was actually
   agreed rather than what a receiver typed.
 
-ponytail: no batch/serial identity on a receipt line. Ceiling: a batch- or
-serial-tracked item cannot be received through this document yet — the stock
-transaction's own refusal says so rather than storing an untracked movement. Upgrade
-path: add `batch_id`/`serial_id` to the line and pass them to
-:func:`app.stock.transactions.receive` when a phase needs tracked receiving.
+* **What arrived is what is identified.** A batch- or serial-tracked item arriving
+  from a supplier carries its identity on the line (`batch_code`/`serial_code`) and the
+  movement stores it, opened on the spot for a batch the company has not seen before —
+  without it a tracked item could not be received at all, and T-6.TRACE.03's trace
+  would have no origin to reach. The identity belongs to the **line**, not the document:
+  one order line arrives as several batches.
 """
 
 from __future__ import annotations
@@ -61,6 +62,7 @@ from app.procurement.orders import (
 )
 from app.procurement.tax import require_supplier_tax
 from app.stock.entries import StockLedgerEntry, movements_for_source
+from app.stock.items import Item
 from app.stock.locations import Location
 from app.stock.transactions import receive
 
@@ -164,6 +166,12 @@ class GoodsReceiptLine(Base):
     )
     uom: Mapped[str] = mapped_column(String(16), nullable=False)
     unit_price: Mapped[Decimal] = mapped_column(MONEY, nullable=False)
+    # The identity of what arrived (T-6.TRACE.03): a batch-tracked item's batch code, a
+    # serial-tracked item's serial code. Resolved when the receipt is posted — a code the
+    # company has not seen before opens the batch — and stored on the movement, which is
+    # where the trace reads it.
+    batch_code: Mapped[str | None] = mapped_column(String(64))
+    serial_code: Mapped[str | None] = mapped_column(String(64))
     # The stock ledger entry posting produced, so a receipt line points at its own
     # movement rather than leaving the two to be matched up by hand.
     movement_id: Mapped[uuid.UUID | None] = mapped_column(
@@ -172,6 +180,43 @@ class GoodsReceiptLine(Base):
 
     receipt: Mapped[GoodsReceipt] = relationship(back_populates="lines")
     order_line: Mapped[PurchaseOrderLine] = relationship()
+
+
+def arriving_batch(session: Session, *, item: Item, code: str | None):
+    """The batch this line arrives as — opened if the company has not seen the code.
+
+    A supplier's lot code is stated by the supplier, not chosen here, so a code nobody has
+    recorded yet is the normal case rather than an error; a tracked item arriving with no
+    code is refused by the stock transaction itself, which is where the rule belongs.
+    """
+    from app.stock.batches import UnknownBatchError, batch_by_code, create_batch
+
+    if code is None:
+        return None
+    try:
+        return batch_by_code(session, item=item, code=code)
+    except UnknownBatchError:
+        return create_batch(session, item=item, code=code)
+
+
+def arriving_serial(session: Session, *, item: Item, code: str | None):
+    """The unit this line arrives as, registered here — one row per unit (T-1.INV.09)."""
+    from app.stock.serials import UnknownSerialError, add_serial, serial_by_code
+
+    if code is None:
+        return None
+    try:
+        return serial_by_code(session, item=item, code=code)
+    except UnknownSerialError:
+        return add_serial(session, item=item, code=code)
+
+
+def _code(value: Any) -> str | None:
+    """A batch or serial code as stated, or None — whitespace is not an identity."""
+    if value is None:
+        return None
+    stated = str(value).strip()
+    return stated or None
 
 
 def _amount(value: Any) -> Decimal:
@@ -201,10 +246,11 @@ def create_receipt(
 ) -> GoodsReceipt:
     """Raise a **draft** receipt against an approved order.
 
-    `lines` is an iterable of
-    ``{"line_no": …, "quantity": …, "rejected_quantity": …}`` naming the **order's**
-    line numbers. The price is taken from the order line, so nothing is re-keyed and
-    the value that reaches stock valuation is the value that was agreed.
+    `lines` is an iterable of ``{"line_no": …, "quantity": …, "rejected_quantity": …,
+    "batch_code": …, "serial_code": …}`` naming the **order's** line numbers — the last two
+    where the item is tracked (T-1.INV.08/T-1.INV.09). The price is taken from the order
+    line, so nothing is re-keyed and the value that reaches stock valuation is the value
+    that was agreed.
     """
     require_approved(session, order)
     wanted = str(number).strip()
@@ -262,6 +308,8 @@ def create_receipt(
                 rejected_quantity=rejected,
                 uom=order_line.uom,
                 unit_price=order_line.unit_price,
+                batch_code=_code(raw.get("batch_code")),
+                serial_code=_code(raw.get("serial_code")),
             )
         )
     session.flush()
@@ -318,6 +366,8 @@ def post_receipt(
             source_type="goods_receipt",
             source_id=receipt.id,
             posting_date=receipt.received_on,
+            batch=arriving_batch(session, item=order_line.item, code=line.batch_code),
+            serial=arriving_serial(session, item=order_line.item, code=line.serial_code),
         )
         line.movement_id = entry.id
         order_line.received_quantity = (

@@ -51,6 +51,7 @@ from app.hr.leave_requests import decide_request, request_leave  # noqa: E402
 from app.hr.overtime import state_rule  # noqa: E402
 from app.hr.shifts import define_shift, roster_employee  # noqa: E402
 from app.ledger import posting  # noqa: E402,F401 — every check builds the one schema
+from app.localization import load_pack  # noqa: E402
 from app.payroll.components import (  # noqa: E402
     define_component,
     load_statutory_components,
@@ -298,7 +299,8 @@ def main() -> int:
         assert stated["period"] == PERIOD and stated["state"] == "computed"
         assert stated["from_date"] == "2026-06-01" and stated["to_date"] == "2026-06-30"
         assert stated["cutoff_date"] == "2026-06-15", stated["cutoff_date"]
-        assert stated["pack_versions"] == "1.0.0" and stated["structure_as_of"] == "2026-06-30"
+        assert stated["pack_versions"] == load_pack("philippines")["version"]
+        assert stated["structure_as_of"] == "2026-06-30"
         assert stated["computed_by"] == "payroll"
         assert stated["employees"] == 2 and stated["incomplete_lines"] == 1
 

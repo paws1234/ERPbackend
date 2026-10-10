@@ -77,6 +77,14 @@ MONEY = Numeric(20, 6)
 # A generated order is a draft: T-2.PROC.06 owns what happens to it next.
 DRAFT, PENDING, APPROVED, CLOSED = "draft", "pending", "approved", "closed"
 
+# T-6.PORTAL.01: the supplier has taken the order on. It is the *supplier-facing* state of an
+# approved order — the buyer's approval stands, and an acknowledged order is still one goods
+# may be received against (`require_approved`), which is why it is not a separate life cycle.
+ACKNOWLEDGED = "acknowledged"
+
+# The states an order no longer needs approval for: approved, and approved-then-taken-on.
+RELEASED = (APPROVED, ACKNOWLEDGED)
+
 # A returned order goes back to draft with a reason (T-0.WF.01's `return`).
 RETURNED = "returned"
 REJECTED = "rejected"
@@ -117,7 +125,8 @@ class PurchaseOrder(Base):
     __table_args__ = (
         UniqueConstraint("company_id", "number", name="uq_purchase_order_company_number"),
         CheckConstraint(
-            "status IN ('draft', 'pending', 'approved', 'returned', 'rejected', 'closed')",
+            "status IN ('draft', 'pending', 'approved', 'acknowledged', 'returned',"
+            " 'rejected', 'closed')",
             name="ck_purchase_order_status",
         ),
         CheckConstraint("revision_no >= 1", name="ck_purchase_order_revision"),
@@ -432,7 +441,7 @@ def require_approved(session: Session, order: PurchaseOrder) -> PurchaseOrder:
     requires approval before it can be sent or received against" is enforced where
     receiving starts, not assumed by each caller.
     """
-    if order.status != APPROVED:
+    if order.status not in RELEASED:
         raise OrderStateError(
             f"purchase order {order.number!r} is {order.status}; it cannot be sent or"
             " received against until its approval chain has approved it"
@@ -496,6 +505,32 @@ def decide_order(
     order.status = _FROM_ENGINE[request.state]
     if order.status == APPROVED:
         order.approved_by = str(actor)
+    session.flush()
+    return order
+
+
+def acknowledge_order(session: Session, order: PurchaseOrder) -> PurchaseOrder:
+    """The supplier has taken the order on — the explicit act, never inferred.
+
+    Refused unless the order was approved (nothing is acknowledged before it is approved,
+    T-2.PROC.06) and refused when it is already acknowledged, so the act happens once and is
+    attributable. The acknowledgement moves the order to `ACKNOWLEDGED`, which
+    :func:`require_approved` still accepts: the supplier taking the order on does not
+    un-approve it, and goods must keep being receivable against it. Who acknowledged and when
+    is the audit trail's to say (T-0.AUDIT.02 records the change with the session's actor, and
+    :func:`status_trail` reads it), so there is no second record of the same act.
+    """
+    if order.status not in RELEASED:
+        raise OrderStateError(
+            f"purchase order {order.number!r} is {order.status}; it cannot be acknowledged"
+            " until its approval chain has approved it"
+        )
+    if order.status == ACKNOWLEDGED:
+        raise OrderStateError(
+            f"purchase order {order.number!r} is already acknowledged; the supplier has"
+            " taken it on"
+        )
+    order.status = ACKNOWLEDGED
     session.flush()
     return order
 
@@ -647,7 +682,7 @@ def close_order(
     still expecting something, so closing it has to be a decision somebody makes and
     states (`short_close_reason`), not something that happens by accident.
     """
-    if order.status != APPROVED:
+    if order.status not in RELEASED:
         raise OrderStateError(
             f"purchase order {order.number!r} is {order.status}; only an approved order"
             " is closed"

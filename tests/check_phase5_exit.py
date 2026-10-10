@@ -57,6 +57,7 @@ from app.hr.shifts import define_shift, roster_employee  # noqa: E402
 from app.ledger import posting  # noqa: E402,F401 — every check builds the one schema
 from app.ledger.accounts import import_coa_template  # noqa: E402
 from app.ledger.mapping import set_mapping  # noqa: E402
+from app.localization import load_pack  # noqa: E402
 from app.payroll.bank_files import bank_file, define_bank_details, reconciles  # noqa: E402
 from app.payroll.components import define_component, load_statutory_components  # noqa: E402
 from app.payroll.engine import (  # noqa: E402
@@ -330,7 +331,8 @@ def main() -> int:
         assert len(definitions) == 6, definitions
         for report in definitions:
             produced = produce_report(session, run, market="philippines", form=report["form"])
-            assert produced["period"] == PERIOD and produced["pack_version"] == "1.0.0"
+            assert produced["period"] == PERIOD
+            assert produced["pack_version"] == load_pack("philippines")["version"]
 
         # 4 — payslips and the payment file, reconciled to the run
         for number, line in lines.items():

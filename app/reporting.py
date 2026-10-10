@@ -12,7 +12,15 @@ every report is registered in and run through:
   is a row change, and re-pointing its recipients is not a deploy.
 * **A run is scoped.** :func:`run` asks T-0.SEC.01 for the definition's
   capability first, so a report is produced for a caller who may see it, for the
-  caller's company only, and a refused attempt is on the audit trail.
+  caller's company only, and a refused attempt is on the audit trail. A recipient
+  is scoped too (T-6.ANALYTICS.02): a mailbox is handed the report, a *subject* is
+  handed it only if it may see that report, and one that may not is named on the
+  run rather than quietly sent the figures.
+* **A run covers a period.** The definition states its granularity and the run
+  states the period it covered, so a re-run for the same period is a `skipped`
+  run — visible, and delivered to nobody — instead of a second copy of the same
+  report, and a report for August says August rather than whatever month it
+  happens to be run in.
 * **A failure is visible.** Every run is a row — requested by whom, started and
   finished, `ok` or `failed` with the error — so a report that never arrived can
   be told from one that failed, and neither is silent.
@@ -28,10 +36,12 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import Callable
-from datetime import datetime, timezone
+from dataclasses import dataclass
+from datetime import date, datetime, timedelta, timezone
 
 from sqlalchemy import (
     CheckConstraint,
+    Date,
     DateTime,
     ForeignKey,
     String,
@@ -46,10 +56,54 @@ from sqlalchemy.orm import Mapped, Session, mapped_column
 
 from app.db import Base
 from app.integrations import send_outbound
-from app.security import require
+from app.security import capabilities, require
 
-# Run states, as the framework reports them.
-OK, FAILED = "ok", "failed"
+# Run states, as the framework reports them. `skipped` is a run that was asked for a period
+# that was already delivered: a row, so the attempt is visible, and no delivery.
+OK, FAILED, SKIPPED = "ok", "failed", "skipped"
+
+# The granularity a definition covers, and the windows each one means.
+DAY, MONTH, QUARTER, YEAR = "day", "month", "quarter", "year"
+PERIODS = (DAY, MONTH, QUARTER, YEAR)
+
+
+class PeriodError(ValueError):
+    """A period the framework cannot read."""
+
+
+@dataclass(frozen=True)
+class Window:
+    """The period one run covers — stated, so a report for August says August.
+
+    A builder reads this rather than asking what month it is: a report re-run for a past period
+    must produce that period's figures, and a report produced this morning for last month must
+    not silently cover this one.
+    """
+
+    granularity: str
+    period: date
+    start: date
+    end: date
+
+
+def period_window(granularity: str, on: date) -> Window:
+    """The window `granularity` means for the date `on`."""
+    chosen = str(granularity).strip().lower()
+    if chosen == DAY:
+        start, end = on, on
+    elif chosen == MONTH:
+        start = on.replace(day=1)
+        end = (start + timedelta(days=32)).replace(day=1) - timedelta(days=1)
+    elif chosen == QUARTER:
+        start = on.replace(month=((on.month - 1) // 3) * 3 + 1, day=1)
+        end = (start + timedelta(days=100)).replace(day=1) - timedelta(days=1)
+    elif chosen == YEAR:
+        start, end = on.replace(month=1, day=1), on.replace(month=12, day=31)
+    else:
+        raise PeriodError(
+            f"unknown period {granularity!r}; a definition covers one of {', '.join(PERIODS)}"
+        )
+    return Window(granularity=chosen, period=on, start=start, end=end)
 
 # The channel a report is delivered over, and the capability a definition carries
 # when it names none.
@@ -156,6 +210,8 @@ class ReportDefinition(Base):
     capability: Mapped[str] = mapped_column(String(64), nullable=False)
     # `report_schedule`: a five-field cron expression, and who receives the result.
     schedule: Mapped[str] = mapped_column(String(64), nullable=False)
+    # What one run of it covers: a day, a month, a quarter or a year (T-6.ANALYTICS.02).
+    period: Mapped[str] = mapped_column(String(16), nullable=False, server_default="month")
     recipients: Mapped[list] = mapped_column(JSONB, nullable=False)
     registered_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
@@ -167,7 +223,7 @@ class ReportRun(Base):
 
     __tablename__ = "report_run"
     __table_args__ = (
-        CheckConstraint("status IN ('ok', 'failed')", name="ck_report_run_status"),
+        CheckConstraint("status IN ('ok', 'failed', 'skipped')", name="ck_report_run_status"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
@@ -181,13 +237,18 @@ class ReportRun(Base):
     started_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
+    # The period this run covered, so "was September delivered?" is a query rather than a guess
+    # (and a second run for it is the `skipped` row below).
+    period: Mapped[date | None] = mapped_column(Date)
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     status: Mapped[str] = mapped_column(String(16), nullable=False)
     # What the builder produced, and what went wrong instead — one of the two.
     produced: Mapped[dict | None] = mapped_column(JSONB)
     error: Mapped[str | None] = mapped_column(Text)
-    # The recipients the run was handed to (T-0.INT.01 owns delivery and retry).
+    # The recipients the run was handed to (T-0.INT.01 owns delivery and retry), and the ones
+    # it was **not** handed to, each with the reason (T-6.ANALYTICS.02).
     delivered_to: Mapped[list | None] = mapped_column(JSONB)
+    withheld_recipients: Mapped[list | None] = mapped_column(JSONB)
 
 
 # report code -> callable(session, definition) -> dict. Registered by the phase
@@ -209,9 +270,11 @@ def register(
     schedule: str,
     recipients: list[str],
     capability: str = DEFAULT_CAPABILITY,
+    period: str = MONTH,
 ) -> ReportDefinition:
-    """Register a report: its schedule and recipients are rows, not code."""
+    """Register a report: its schedule, its period and its recipients are rows, not code."""
     validate_schedule(schedule)
+    period_window(period, date.today())  # refuses a granularity nothing can read
     if not recipients:
         raise ReportError(f"{code} needs at least one recipient")
     definition = ReportDefinition(
@@ -220,6 +283,7 @@ def register(
         name=name,
         capability=capability,
         schedule=schedule,
+        period=period,
         recipients=list(recipients),
     )
     session.add(definition)
@@ -241,19 +305,67 @@ def due(
     ]
 
 
+def deliverable_recipients(
+    session: Session, definition: ReportDefinition
+) -> tuple[list[str], list[dict]]:
+    """Which recipients may be handed this report, and which may not, with the reason.
+
+    A **mailbox** is handed it: an address is not a subject of this platform, and the definition
+    naming it is the decision. A recipient that names a **subject** is checked against the
+    report's own capability first, so a run can never post the figures to somebody the API would
+    refuse to show them to — the run says who it left out instead.
+    """
+    allowed: list[str] = []
+    withheld: list[dict] = []
+    for recipient in definition.recipients:
+        named = str(recipient)
+        if "@" in named:
+            allowed.append(named)
+            continue
+        held = capabilities(session, company_id=definition.company_id, subject=named)
+        if definition.capability in held:
+            allowed.append(named)
+        else:
+            withheld.append(
+                {
+                    "recipient": named,
+                    "reason": f"{named!r} may not {definition.capability!r} (holds"
+                    f" {', '.join(sorted(held)) or 'no capabilities'})",
+                }
+            )
+    return allowed, withheld
+
+
+def delivered_period(
+    session: Session, definition: ReportDefinition, period: date
+) -> ReportRun | None:
+    """The run that already delivered this period, if one did — what a re-run is measured against."""
+    return session.scalar(
+        select(ReportRun).where(
+            ReportRun.definition_id == definition.id,
+            ReportRun.period == period,
+            ReportRun.status == OK,
+        )
+    )
+
+
 def run(
     session: Session,
     definition: ReportDefinition,
     *,
     actor: str,
     now: datetime | None = None,
+    period: date | None = None,
 ) -> ReportRun:
-    """Produce one report for one caller, and deliver it to its recipients.
+    """Produce one report for one caller and period, and deliver it to its recipients.
 
-    The capability is asked for first: a caller who may not see the report is
-    refused before anything is built, and the refusal is on the trail. Whatever
-    happens afterwards is a run row — a builder that raises leaves a `failed`
-    run with its error, not a silent absence.
+    The capability is asked for first: a caller who may not see the report is refused before
+    anything is built, and the refusal is on the trail. Whatever happens afterwards is a run
+    row — a builder that raises leaves a `failed` run with its error, not a silent absence.
+
+    A period that was **already delivered** leaves a `skipped` run instead: the attempt stays
+    visible, and the same report for the same period does not arrive twice. A period that
+    *failed* is not skipped — retrying a failure is the reason the run is a row.
     """
     require(
         session,
@@ -263,10 +375,31 @@ def run(
         entity="report_definition",
         entity_id=definition.id,
     )
+    moment = period or (now or datetime.now(timezone.utc)).date()
+    window = period_window(definition.period, moment)
+
+    already = delivered_period(session, definition, moment)
+    if already is not None:
+        skipped = ReportRun(
+            company_id=definition.company_id,
+            definition_id=definition.id,
+            requested_by=str(actor),
+            period=moment,
+            status=SKIPPED,
+            error=(
+                f"the {definition.period} of {window.start}..{window.end} was already delivered"
+                f" on {already.finished_at or already.started_at}"
+            ),
+        )
+        session.add(skipped)
+        session.flush()
+        return skipped
+
     run_row = ReportRun(
         company_id=definition.company_id,
         definition_id=definition.id,
         requested_by=str(actor),
+        period=moment,
         status=FAILED,
     )
     session.add(run_row)
@@ -280,14 +413,15 @@ def run(
         )
     else:
         try:
-            run_row.produced = builder(session, definition)
+            run_row.produced = builder(session, definition, window)
         except Exception as exc:  # a run that failed is a row, not an exception
             run_row.error = f"{type(exc).__name__}: {exc}"
         else:
             run_row.status = OK
 
     if run_row.status == OK:
-        for recipient in definition.recipients:
+        allowed, withheld = deliverable_recipients(session, definition)
+        for recipient in allowed:
             send_outbound(
                 session,
                 company_id=definition.company_id,
@@ -296,11 +430,13 @@ def run(
                 payload={
                     "report": definition.code,
                     "name": definition.name,
-                    "requested_by": str(actor),
+                    "period": window.start.isoformat(),
                     "produced": run_row.produced,
                 },
             )
-        run_row.delivered_to = list(definition.recipients)
+        run_row.delivered_to = allowed
+        if withheld:
+            run_row.withheld_recipients = withheld
 
     run_row.finished_at = func.now()
     session.flush()

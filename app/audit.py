@@ -162,8 +162,82 @@ ORIGIN_TYPE_SETTING = "app.origin_type"
 ORIGIN_ID_SETTING = "app.origin_id"
 UNKNOWN_ACTOR = "unknown"
 
+# Where the stated values are held on the session, so the attribution is restored to every
+# transaction the session opens rather than lapsing when one of them commits.
+_ACTOR = "audit_actor"
+_ORIGIN = "audit_origin"
+
 # The table the trail is written to; never audited itself (it would recurse).
 TRAIL_TABLE = "audit_log"
+
+# Child tables (app/db.py's CHILD_TABLES) whose rows change **on their own**, so the change
+# has no trail row today: granting a capability writes a `permission` row and leaves the role
+# untouched, restricting a field writes a `field_permission` row, a party that becomes a
+# customer gains a `party_role` row, and counting an item rewrites a `physical_count_line`
+# while its count sits still. A child written only with its parent (`journal_line`,
+# `approval_level`, the append-only `approval_decision`) is deliberately absent: it cannot
+# change without the parent, whose own row names the change.
+AUDIT_THROUGH_PARENT = ("permission", "field_permission", "party_role", "physical_count_line")
+
+
+def _audited_children(tables: set[str]) -> dict[str, tuple[str, str, str]]:
+    """The child tables to resolve through a parent, for the schema being created.
+
+    Keyed by table name, valued by ``(parent, foreign key, parent key)``. Only pairs whose
+    parent is in this schema: the trigger names the parent table, so a schema holding a subset
+    (one module's own check, where ``physical_count`` is absent) installs a function that
+    mentions only what it has. A name in :data:`AUDIT_THROUGH_PARENT` that is not a child table
+    at all is a mistake in the list rather than a gap, and is refused here.
+    """
+    from app.db import CHILD_TABLES
+
+    unknown = [name for name in AUDIT_THROUGH_PARENT if name not in CHILD_TABLES]
+    if unknown:
+        raise RuntimeError(
+            f"{unknown} are named for the trail but are not child tables in app/db.py"
+        )
+    return {
+        name: CHILD_TABLES[name]
+        for name in AUDIT_THROUGH_PARENT
+        if name in tables and CHILD_TABLES[name][0] in tables
+    }
+
+
+def _owning_through_parent(children: dict[str, tuple[str, str, str]]) -> str:
+    """The `CASE` that reads a child table's company from the parent that carries it.
+
+    A child row has no dimension of its own — ``app/db.py``'s ``CHILD_TABLES`` says which
+    parent carries it — so the trail row belongs to that parent's company, read from the
+    parent row the child points at.
+    """
+    if not children:
+        # A schema holding none of them (a module's own check) gets no CASE at all.
+        return "NULL::uuid"
+    arms = "\n".join(
+        f"            WHEN '{name}' THEN"
+        f" (SELECT p.{COMPANY_COLUMN} FROM {parent} p"
+        f" WHERE p.{key} = coalesce(row_after ->> '{foreign_key}',"
+        f" row_before ->> '{foreign_key}')::uuid)"
+        for name, (parent, foreign_key, key) in sorted(children.items())
+    )
+    return f"CASE TG_TABLE_NAME\n{arms}\n            END"
+
+
+def _subject_through_parent(children: dict[str, tuple[str, str, str]]) -> str:
+    """The `CASE` naming, for a child table, the row it belongs to — its parent.
+
+    A child row's own key says nothing a reader can follow: "which party gained this role" is
+    the child's ``party_id``, so a child's trail row carries its **parent's** id and is read
+    back by the master whose change it was.
+    """
+    if not children:
+        return "NULL::text"
+    arms = "\n".join(
+        f"            WHEN '{name}' THEN"
+        f" coalesce(row_after ->> '{foreign_key}', row_before ->> '{foreign_key}')"
+        for name, (_parent, foreign_key, _key) in sorted(children.items())
+    )
+    return f"CASE TG_TABLE_NAME\n{arms}\n            END"
 
 
 class AuditLog(Base):
@@ -195,7 +269,8 @@ class AuditLog(Base):
     origin_id: Mapped[str | None] = mapped_column(String(64))
 
 
-# '%%' because SQLAlchemy's DDL wrapper interpolates the statement.
+# '%%' because SQLAlchemy's DDL wrapper interpolates the statement. The two `{...}` holes are
+# filled in when the schema is created, with the child tables that schema actually holds.
 _AUDIT_FUNCTION = """
 CREATE OR REPLACE FUNCTION audit_row_change() RETURNS trigger
 LANGUAGE plpgsql
@@ -223,13 +298,20 @@ BEGIN
         act := 'restore';
     END IF;
 
-    subject := coalesce(row_after ->> 'id', row_before ->> 'id');
+    subject := coalesce(
+        -- A child row's identity is the row it belongs to: the change was that party's,
+        -- that role's, that count's. Everything else is its own id.
+        {subject_through_parent},
+        coalesce(row_after ->> 'id', row_before ->> 'id')
+    );
     -- The owning company is the row's own dimension; the company master is the
-    -- dimension itself, so there it is the row's id.
+    -- dimension itself, so there it is the row's id; a child row has none, so it is
+    -- read from the parent that carries it.
     owning := coalesce(
         nullif(coalesce(row_after ->> 'company_id', row_before ->> 'company_id'), '')::uuid,
         CASE WHEN TG_TABLE_NAME = 'company'
-             THEN coalesce(row_after ->> 'id', row_before ->> 'id')::uuid END
+             THEN coalesce(row_after ->> 'id', row_before ->> 'id')::uuid END,
+        {owning_through_parent}
     );
 
     INSERT INTO audit_log (id, company_id, actor, action, entity, entity_id,
@@ -253,10 +335,11 @@ $$;
 def _audited(metadata) -> list:
     """The tables whose changes the trail records.
 
-    Every table carrying the company dimension, plus the company master. Child
-    tables (``journal_line``) are not audited separately: they cannot change
-    without their parent (both are append-only) and the parent's row already
-    names the change, so a line's own trail row would be a duplicate.
+    Every table carrying the company dimension, plus the company master, plus the child
+    tables whose rows change **on their own** (:data:`AUDIT_THROUGH_PARENT`). Child tables
+    written only with their parent (``journal_line``) are not audited separately: they cannot
+    change without it, and the parent's row already names the change, so a line's own trail
+    row would be a duplicate.
     """
     from app.db import GLOBAL_TABLES
 
@@ -264,13 +347,23 @@ def _audited(metadata) -> list:
         table
         for table in metadata.tables.values()
         if table.name != TRAIL_TABLE
-        and (COMPANY_COLUMN in table.c or table.name in GLOBAL_TABLES)
+        and (
+            COMPANY_COLUMN in table.c
+            or table.name in GLOBAL_TABLES
+            or table.name in AUDIT_THROUGH_PARENT
+        )
     ]
 
 
 def _install_audit(metadata, connection, **_kw) -> None:
     """Create the trail's trigger function and one trigger per audited table."""
-    connection.exec_driver_sql(_AUDIT_FUNCTION)
+    children = _audited_children(set(metadata.tables))
+    connection.exec_driver_sql(
+        _AUDIT_FUNCTION.format(
+            owning_through_parent=_owning_through_parent(children),
+            subject_through_parent=_subject_through_parent(children),
+        )
+    )
     for table in _audited(metadata):
         connection.exec_driver_sql(
             f"CREATE TRIGGER {table.name}_audited"
@@ -287,22 +380,46 @@ event.listen(Base.metadata, "after_create", _install_audit)
 append_only(AuditLog.__table__)
 
 
+def _apply_setting(connection, name: str, value: str) -> None:
+    connection.exec_driver_sql(f"SELECT set_config('{name}', %s, true)", (str(value),))
+
+
+@event.listens_for(Session, "after_begin")
+def _reapply_attribution(session: Session, transaction, connection) -> None:
+    """Put the actor and the origin on a transaction that just began.
+
+    Both are transaction-scoped settings, so a service that commits half-way through a request
+    — the inbound integration handler, a dunning run, an outbound delivery — used to leave
+    everything it wrote afterwards attributed to nobody. The values the caller stated are held
+    on the session and re-applied to every transaction it opens, so attribution survives the
+    commit. The session is one request's (the API opens and closes it per request), so nothing
+    leaks across requests.
+    """
+    actor = session.info.get(_ACTOR)
+    if actor is not None:
+        _apply_setting(connection, ACTOR_SETTING, actor)
+    origin = session.info.get(_ORIGIN)
+    if origin is not None:
+        _apply_setting(connection, ORIGIN_TYPE_SETTING, origin[0])
+        _apply_setting(connection, ORIGIN_ID_SETTING, origin[1])
+
+
 def set_actor(session: Session, actor: str) -> None:
-    """State who is making the changes in this transaction (the RBAC subject)."""
-    session.connection().exec_driver_sql(
-        f"SELECT set_config('{ACTOR_SETTING}', %s, true)", (str(actor),)
-    )
+    """State who is making the changes in this transaction (the RBAC subject).
+
+    Held on the session as well as set on the transaction, so the attribution is not lost when
+    the work commits and carries on (:func:`_reapply_attribution`).
+    """
+    session.info[_ACTOR] = str(actor)
+    _apply_setting(session.connection(), ACTOR_SETTING, actor)
 
 
 def set_origin(session: Session, document_type: str, document_id: Any) -> None:
     """State the document this transaction changes, so the trail can trace back."""
+    session.info[_ORIGIN] = (str(document_type), str(document_id))
     connection = session.connection()
-    connection.exec_driver_sql(
-        f"SELECT set_config('{ORIGIN_TYPE_SETTING}', %s, true)", (str(document_type),)
-    )
-    connection.exec_driver_sql(
-        f"SELECT set_config('{ORIGIN_ID_SETTING}', %s, true)", (str(document_id),)
-    )
+    _apply_setting(connection, ORIGIN_TYPE_SETTING, document_type)
+    _apply_setting(connection, ORIGIN_ID_SETTING, document_id)
 
 
 def read_trail(

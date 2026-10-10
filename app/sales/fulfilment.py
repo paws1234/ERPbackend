@@ -385,13 +385,27 @@ def _order_line(order: SalesOrder, line_no: int) -> SalesOrderLine:
     )
 
 
+def _shipped_batch(session: Session, *, item: Item, code: str | None):
+    """The lot that left the shelf: it must already be in stock, so it is looked up, not opened."""
+    from app.stock.batches import batch_by_code
+
+    return None if code is None else batch_by_code(session, item=item, code=str(code).strip())
+
+
+def _shipped_serial(session: Session, *, item: Item, code: str | None):
+    """The unit that left the shelf — one row, and it must already exist."""
+    from app.stock.serials import serial_by_code
+
+    return None if code is None else serial_by_code(session, item=item, code=str(code).strip())
+
+
 def ship_order(
     session: Session,
     order: SalesOrder,
     *,
     number: str,
     warehouse: Location,
-    lines: Iterable[tuple[int, Any]],
+    lines: Iterable[tuple],
     on: date | None = None,
 ) -> Shipment:
     """Ship what is named of a confirmed order, issuing it out of `warehouse`.
@@ -411,7 +425,10 @@ def ship_order(
     wanted = str(number or "").strip()
     if not wanted:
         raise FulfilmentError("a shipment number is required")
-    asked = [(no, _quantised(quantity)) for no, quantity in lines]
+    # A line may be stated as `(line_no, quantity)` or with the identity that left the shelf —
+    # `(line_no, quantity, batch_code, serial_code)` — which is what a batch- or serial-tracked
+    # item needs and what T-6.TRACE.03's forward trace reads (who received which lot).
+    asked = [tuple(raw) for raw in lines]
     if not asked:
         raise EmptyShipmentError(
             f"shipment {wanted!r} names no lines, so nothing would leave the warehouse"
@@ -437,7 +454,11 @@ def ship_order(
     session.add(shipment)
     session.flush()
 
-    for line_no, quantity in asked:
+    for raw in asked:
+        line_no = int(raw[0])
+        quantity = _quantised(raw[1])
+        batch_code = raw[2] if len(raw) > 2 else None
+        serial_code = raw[3] if len(raw) > 3 else None
         line = _order_line(order, line_no)
         if line.item_id is None:
             raise NothingToIssueError(
@@ -465,6 +486,10 @@ def ship_order(
             source_type=DOC_TYPE,
             source_id=shipment.id,
             posting_date=shipment.shipped_on,
+            batch=_shipped_batch(session, item=session.get(Item, line.item_id),
+                                 code=batch_code),
+            serial=_shipped_serial(session, item=session.get(Item, line.item_id),
+                                   code=serial_code),
         )
         shipped = ShipmentLine(
             company_id=order.company_id,

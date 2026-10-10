@@ -365,6 +365,12 @@ def _install_audit(metadata, connection, **_kw) -> None:
         )
     )
     for table in _audited(metadata):
+        # Dropped first for the same reason the scoping policy is (app/db.py): this hook runs on
+        # every `create_all`, not only on a table's own creation, and Postgres has no
+        # `CREATE TRIGGER IF NOT EXISTS`.
+        connection.exec_driver_sql(
+            f"DROP TRIGGER IF EXISTS {table.name}_audited ON {table.name}"
+        )
         connection.exec_driver_sql(
             f"CREATE TRIGGER {table.name}_audited"
             f" AFTER INSERT OR UPDATE OR DELETE ON {table.name}"

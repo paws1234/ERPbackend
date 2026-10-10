@@ -113,6 +113,12 @@ def company_scoping_ddl(metadata: MetaData, connection) -> None:
     connection.exec_driver_sql(_TENANT_FUNCTION)
     for name, predicate in predicates.items():
         connection.exec_driver_sql(f"ALTER TABLE {name} ENABLE ROW LEVEL SECURITY")
+        # Dropped first, because this hook fires on **every** `create_all` — including one that
+        # found the tables already there — and Postgres has no `CREATE POLICY IF NOT EXISTS`.
+        # Without this, creating the schema twice in one database fails on the second policy
+        # instead of being the no-op a repeated install (app/bootstrap.py) needs. Replacing it
+        # also leaves the policy this code states, not one an earlier version wrote.
+        connection.exec_driver_sql(f"DROP POLICY IF EXISTS company_isolation ON {name}")
         connection.exec_driver_sql(
             f"CREATE POLICY company_isolation ON {name}"
             f" USING ({predicate}) WITH CHECK ({predicate})"

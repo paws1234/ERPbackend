@@ -364,27 +364,29 @@ def current_month(today: date | None = None) -> tuple[date, date]:
 def register_builders() -> None:
     """Register the four statements with T-0.REPORT.01's framework.
 
-    The scheduled run covers the current calendar month, which is what a monthly
-    financial report means; a caller wanting another period calls the statement
-    directly.
+    The window is the **run's**, not the clock's (T-6.ANALYTICS.02): the definition's own
+    granularity decides what one run covers, so a statement for August can be produced in
+    September and says August.
     """
-    from app.reporting import ReportDefinition, register_builder
+    from app.reporting import ReportDefinition, Window, register_builder
 
-    def _trial_balance(session: Session, definition: ReportDefinition) -> dict:
-        start, end = current_month()
-        return trial_balance(session, company_id=definition.company_id, start=start, end=end)
+    def _trial_balance(session: Session, definition: ReportDefinition, window: Window) -> dict:
+        return trial_balance(
+            session, company_id=definition.company_id, start=window.start, end=window.end
+        )
 
-    def _profit_and_loss(session: Session, definition: ReportDefinition) -> dict:
-        start, end = current_month()
-        return profit_and_loss(session, company_id=definition.company_id, start=start, end=end)
+    def _profit_and_loss(session: Session, definition: ReportDefinition, window: Window) -> dict:
+        return profit_and_loss(
+            session, company_id=definition.company_id, start=window.start, end=window.end
+        )
 
-    def _balance_sheet(session: Session, definition: ReportDefinition) -> dict:
-        _start, end = current_month()
-        return balance_sheet(session, company_id=definition.company_id, as_of=end)
+    def _balance_sheet(session: Session, definition: ReportDefinition, window: Window) -> dict:
+        return balance_sheet(session, company_id=definition.company_id, as_of=window.end)
 
-    def _cash_flow(session: Session, definition: ReportDefinition) -> dict:
-        start, end = current_month()
-        return cash_flow(session, company_id=definition.company_id, start=start, end=end)
+    def _cash_flow(session: Session, definition: ReportDefinition, window: Window) -> dict:
+        return cash_flow(
+            session, company_id=definition.company_id, start=window.start, end=window.end
+        )
 
     register_builder("trial_balance", _trial_balance)
     register_builder("profit_and_loss", _profit_and_loss)

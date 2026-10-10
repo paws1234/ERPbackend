@@ -175,6 +175,71 @@
         "title": "CashDrawerPolicyIn",
         "type": "object"
       },
+      "CatalogueEntryOut": {
+        "description": "One report an operator can schedule: what it covers, over how long, and who may.",
+        "properties": {
+          "built": {
+            "title": "Built",
+            "type": "boolean"
+          },
+          "capability": {
+            "title": "Capability",
+            "type": "string"
+          },
+          "code": {
+            "title": "Code",
+            "type": "string"
+          },
+          "kind": {
+            "title": "Kind",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "period": {
+            "title": "Period",
+            "type": "string"
+          },
+          "schedule": {
+            "title": "Schedule",
+            "type": "string"
+          },
+          "scope": {
+            "title": "Scope",
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "name",
+          "kind",
+          "scope",
+          "capability",
+          "schedule",
+          "period",
+          "built"
+        ],
+        "title": "CatalogueEntryOut",
+        "type": "object"
+      },
+      "CatalogueOut": {
+        "properties": {
+          "entries": {
+            "items": {
+              "$ref": "#/components/schemas/CatalogueEntryOut"
+            },
+            "title": "Entries",
+            "type": "array"
+          }
+        },
+        "required": [
+          "entries"
+        ],
+        "title": "CatalogueOut",
+        "type": "object"
+      },
       "CoaImportIn": {
         "properties": {
           "market": {
@@ -631,6 +696,166 @@
           "name"
         ],
         "title": "CurrencyOut",
+        "type": "object"
+      },
+      "DashboardOut": {
+        "properties": {
+          "as_of": {
+            "format": "date",
+            "title": "As Of",
+            "type": "string"
+          },
+          "drill_down": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Drill Down"
+          },
+          "generated_at": {
+            "format": "date-time",
+            "title": "Generated At",
+            "type": "string"
+          },
+          "start": {
+            "format": "date",
+            "title": "Start",
+            "type": "string"
+          },
+          "tiles": {
+            "items": {
+              "$ref": "#/components/schemas/DashboardTileOut"
+            },
+            "title": "Tiles",
+            "type": "array"
+          },
+          "withheld": {
+            "items": {
+              "$ref": "#/components/schemas/DashboardWithheldOut"
+            },
+            "title": "Withheld",
+            "type": "array"
+          }
+        },
+        "required": [
+          "as_of",
+          "start",
+          "generated_at",
+          "tiles",
+          "withheld"
+        ],
+        "title": "DashboardOut",
+        "type": "object"
+      },
+      "DashboardTileOut": {
+        "description": "One figure, what it has to agree with, and (when asked) the rows behind it.",
+        "properties": {
+          "basis": {
+            "anyOf": [
+              {
+                "items": {
+                  "additionalProperties": true,
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Basis"
+          },
+          "basis_label": {
+            "title": "Basis Label",
+            "type": "string"
+          },
+          "basis_rows": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Basis Rows"
+          },
+          "basis_truncated": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Basis Truncated"
+          },
+          "capability": {
+            "title": "Capability",
+            "type": "string"
+          },
+          "code": {
+            "title": "Code",
+            "type": "string"
+          },
+          "figures": {
+            "additionalProperties": true,
+            "title": "Figures",
+            "type": "object"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "reconciled_to": {
+            "additionalProperties": true,
+            "title": "Reconciled To",
+            "type": "object"
+          }
+        },
+        "required": [
+          "code",
+          "label",
+          "capability",
+          "figures",
+          "reconciled_to",
+          "basis_label"
+        ],
+        "title": "DashboardTileOut",
+        "type": "object"
+      },
+      "DashboardWithheldOut": {
+        "description": "A tile this subject may not see: named, with the refusal's own sentence and no figure.",
+        "properties": {
+          "capability": {
+            "title": "Capability",
+            "type": "string"
+          },
+          "code": {
+            "title": "Code",
+            "type": "string"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "reason": {
+            "title": "Reason",
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "label",
+          "capability",
+          "reason"
+        ],
+        "title": "DashboardWithheldOut",
         "type": "object"
       },
       "DrawerMovementIn": {
@@ -1912,6 +2137,196 @@
         "title": "PipelineStageOut",
         "type": "object"
       },
+      "PortalDocumentsOut": {
+        "description": "What this supplier may see: its RFQs, its orders and its invoices.",
+        "properties": {
+          "documents": {
+            "additionalProperties": true,
+            "title": "Documents",
+            "type": "object"
+          }
+        },
+        "required": [
+          "documents"
+        ],
+        "title": "PortalDocumentsOut",
+        "type": "object"
+      },
+      "PortalInvoiceIn": {
+        "description": "A supplier's invoice against an order, as it is submitted.",
+        "properties": {
+          "invoice_date": {
+            "format": "date",
+            "title": "Invoice Date",
+            "type": "string"
+          },
+          "lines": {
+            "items": {
+              "$ref": "#/components/schemas/PortalLineIn"
+            },
+            "minItems": 1,
+            "title": "Lines",
+            "type": "array"
+          },
+          "number": {
+            "maxLength": 32,
+            "minLength": 1,
+            "title": "Number",
+            "type": "string"
+          },
+          "order_number": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Order Number"
+          },
+          "supplier_reference": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Supplier Reference",
+            "type": "string"
+          }
+        },
+        "required": [
+          "number",
+          "invoice_date",
+          "supplier_reference",
+          "lines"
+        ],
+        "title": "PortalInvoiceIn",
+        "type": "object"
+      },
+      "PortalLineIn": {
+        "description": "One line a supplier states: the RFQ's own line number, or an invoice line.",
+        "properties": {
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "line_no": {
+            "minimum": 1.0,
+            "title": "Line No",
+            "type": "integer"
+          },
+          "quantity": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Quantity"
+          },
+          "unit_price": {
+            "title": "Unit Price",
+            "type": "string"
+          }
+        },
+        "required": [
+          "line_no",
+          "unit_price"
+        ],
+        "title": "PortalLineIn",
+        "type": "object"
+      },
+      "PortalResponseIn": {
+        "description": "A supplier's answer to an RFQ, line by line.",
+        "properties": {
+          "currency": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Currency"
+          },
+          "lead_time_days": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Lead Time Days"
+          },
+          "lines": {
+            "items": {
+              "$ref": "#/components/schemas/PortalLineIn"
+            },
+            "minItems": 1,
+            "title": "Lines",
+            "type": "array"
+          },
+          "note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Note"
+          },
+          "received_on": {
+            "format": "date",
+            "title": "Received On",
+            "type": "string"
+          },
+          "valid_until": {
+            "anyOf": [
+              {
+                "format": "date",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Valid Until"
+          }
+        },
+        "required": [
+          "received_on",
+          "lines"
+        ],
+        "title": "PortalResponseIn",
+        "type": "object"
+      },
+      "PortalWriteOut": {
+        "description": "What a portal write recorded, as the supplier reads it back.",
+        "properties": {
+          "recorded": {
+            "additionalProperties": true,
+            "title": "Recorded",
+            "type": "object"
+          }
+        },
+        "required": [
+          "recorded"
+        ],
+        "title": "PortalWriteOut",
+        "type": "object"
+      },
       "PosLineOut": {
         "properties": {
           "barcode": {
@@ -2363,6 +2778,234 @@
           "variance_reason"
         ],
         "title": "PosShiftOut",
+        "type": "object"
+      },
+      "PosSyncIn": {
+        "description": "A terminal's whole queue, and the policy it was trading under offline.",
+        "properties": {
+          "location_code": {
+            "maxLength": 32,
+            "minLength": 1,
+            "title": "Location Code",
+            "type": "string"
+          },
+          "oversell_allowed": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Oversell Allowed"
+          },
+          "sales": {
+            "items": {
+              "$ref": "#/components/schemas/PosSyncSaleIn"
+            },
+            "minItems": 1,
+            "title": "Sales",
+            "type": "array"
+          },
+          "terminal": {
+            "maxLength": 32,
+            "minLength": 1,
+            "title": "Terminal",
+            "type": "string"
+          }
+        },
+        "required": [
+          "terminal",
+          "location_code",
+          "sales"
+        ],
+        "title": "PosSyncIn",
+        "type": "object"
+      },
+      "PosSyncLineIn": {
+        "description": "One queued line as the till rang it: the code, the shelf price and how many.",
+        "properties": {
+          "barcode": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Barcode",
+            "type": "string"
+          },
+          "base_price": {
+            "title": "Base Price",
+            "type": "string"
+          },
+          "campaign": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Campaign"
+          },
+          "quantity": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Quantity"
+          },
+          "uom": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Uom"
+          }
+        },
+        "required": [
+          "barcode",
+          "base_price"
+        ],
+        "title": "PosSyncLineIn",
+        "type": "object"
+      },
+      "PosSyncOut": {
+        "description": "The run's one reconciliation report: its counts, its outcomes and its differences.",
+        "properties": {
+          "report": {
+            "additionalProperties": true,
+            "title": "Report",
+            "type": "object"
+          }
+        },
+        "required": [
+          "report"
+        ],
+        "title": "PosSyncOut",
+        "type": "object"
+      },
+      "PosSyncReportsOut": {
+        "description": "A terminal's sync runs, in the order it made them \u2014 one per run, never per sale.",
+        "properties": {
+          "reports": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Reports",
+            "type": "array"
+          }
+        },
+        "required": [
+          "reports"
+        ],
+        "title": "PosSyncReportsOut",
+        "type": "object"
+      },
+      "PosSyncSaleIn": {
+        "description": "One sale rung up while the terminal was away, under the number the till gave it.",
+        "properties": {
+          "currency": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Currency"
+          },
+          "customer_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Customer Code"
+          },
+          "lines": {
+            "items": {
+              "$ref": "#/components/schemas/PosSyncLineIn"
+            },
+            "minItems": 1,
+            "title": "Lines",
+            "type": "array"
+          },
+          "number": {
+            "maxLength": 32,
+            "minLength": 1,
+            "title": "Number",
+            "type": "string"
+          },
+          "sold_on": {
+            "anyOf": [
+              {
+                "format": "date",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sold On"
+          },
+          "tenders": {
+            "items": {
+              "$ref": "#/components/schemas/PosSyncTenderIn"
+            },
+            "minItems": 1,
+            "title": "Tenders",
+            "type": "array"
+          }
+        },
+        "required": [
+          "number",
+          "lines",
+          "tenders"
+        ],
+        "title": "PosSyncSaleIn",
+        "type": "object"
+      },
+      "PosSyncTenderIn": {
+        "description": "One queued payment: what kind, how much, and its reference.",
+        "properties": {
+          "amount": {
+            "title": "Amount",
+            "type": "string"
+          },
+          "reference": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reference"
+          },
+          "tender_type": {
+            "title": "Tender Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "tender_type",
+          "amount"
+        ],
+        "title": "PosSyncTenderIn",
         "type": "object"
       },
       "PosTenderIn": {
@@ -3083,6 +3726,17 @@
             "title": "Name",
             "type": "string"
           },
+          "period": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Period"
+          },
           "recipients": {
             "items": {
               "type": "string"
@@ -3118,6 +3772,10 @@
             "title": "Name",
             "type": "string"
           },
+          "period": {
+            "title": "Period",
+            "type": "string"
+          },
           "recipients": {
             "items": {
               "type": "string"
@@ -3134,6 +3792,7 @@
           "code",
           "name",
           "schedule",
+          "period",
           "capability",
           "recipients"
         ],
@@ -3171,6 +3830,18 @@
             ],
             "title": "Error"
           },
+          "period": {
+            "anyOf": [
+              {
+                "format": "date",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Period"
+          },
           "produced": {
             "anyOf": [
               {
@@ -3186,6 +3857,20 @@
           "status": {
             "title": "Status",
             "type": "string"
+          },
+          "withheld_recipients": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/WithheldRecipientOut"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Withheld Recipients"
           }
         },
         "required": [
@@ -3696,6 +4381,25 @@
           "lines"
         ],
         "title": "ShipmentOut",
+        "type": "object"
+      },
+      "WithheldRecipientOut": {
+        "description": "A recipient the run did not deliver to, and why \u2014 a subject without the capability.",
+        "properties": {
+          "reason": {
+            "title": "Reason",
+            "type": "string"
+          },
+          "recipient": {
+            "title": "Recipient",
+            "type": "string"
+          }
+        },
+        "required": [
+          "recipient",
+          "reason"
+        ],
+        "title": "WithheldRecipientOut",
         "type": "object"
       }
     }
@@ -5045,6 +5749,169 @@
         "summary": "New Currency",
         "tags": [
           "currency"
+        ]
+      }
+    },
+    "/api/v1/dashboard": {
+      "get": {
+        "description": "The tiles this subject may see, with the records behind one of them.\n\nRead fresh on every request and stamped with its own `generated_at`, so what a reader\nsees is the ledger as it stands rather than a snapshot from last night. A tile the\ncaller may not see is absent and named in `withheld` with the refusal's sentence \u2014 the\nfigure is not zeroed \u2014 and the refusal is on the trail like every other. Asking for a\ntile's `drill_down` returns the rows that figure was computed from, in one step.",
+        "operationId": "read_dashboard_api_v1_dashboard_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "as_of",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "date",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "As Of"
+            }
+          },
+          {
+            "in": "query",
+            "name": "start",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "date",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Start"
+            }
+          },
+          {
+            "in": "query",
+            "name": "drill_down",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Drill Down"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-company-id",
+            "required": true,
+            "schema": {
+              "title": "X-Company-Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-actor",
+            "required": false,
+            "schema": {
+              "default": "unknown",
+              "title": "X-Actor",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DashboardOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The request could not be understood"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The caller is not identified"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The caller may not do this"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The company, document or route does not exist"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The request clashes with one already made"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The request did not match the contract, or a domain rule refused it"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The platform failed unexpectedly"
+          }
+        },
+        "summary": "Read Dashboard",
+        "tags": [
+          "reporting"
         ]
       }
     },
@@ -6576,6 +7443,496 @@
         ]
       }
     },
+    "/api/v1/portal/documents": {
+      "get": {
+        "description": "Everything this supplier may see \u2014 its RFQs, its released orders and its invoices.",
+        "operationId": "portal_view_api_v1_portal_documents_get",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "x-company-id",
+            "required": true,
+            "schema": {
+              "title": "X-Company-Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-actor",
+            "required": false,
+            "schema": {
+              "default": "unknown",
+              "title": "X-Actor",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PortalDocumentsOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The request could not be understood"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The caller is not identified"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The caller may not do this"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The company, document or route does not exist"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The request clashes with one already made"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The request did not match the contract, or a domain rule refused it"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The platform failed unexpectedly"
+          }
+        },
+        "summary": "Portal View",
+        "tags": [
+          "portal"
+        ]
+      }
+    },
+    "/api/v1/portal/invoices": {
+      "post": {
+        "description": "Submit an invoice as a draft \u2014 posting and matching stay the buyer's review.",
+        "operationId": "portal_invoice_api_v1_portal_invoices_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "x-company-id",
+            "required": true,
+            "schema": {
+              "title": "X-Company-Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-actor",
+            "required": false,
+            "schema": {
+              "default": "unknown",
+              "title": "X-Actor",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PortalInvoiceIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PortalWriteOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The request could not be understood"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The caller is not identified"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The caller may not do this"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The company, document or route does not exist"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The request clashes with one already made"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The request did not match the contract, or a domain rule refused it"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The platform failed unexpectedly"
+          }
+        },
+        "summary": "Portal Invoice",
+        "tags": [
+          "portal"
+        ]
+      }
+    },
+    "/api/v1/portal/orders/{number}/acknowledge": {
+      "post": {
+        "description": "Take one of this supplier's orders on \u2014 the domain's own transition, once.",
+        "operationId": "portal_acknowledge_order_api_v1_portal_orders__number__acknowledge_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "number",
+            "required": true,
+            "schema": {
+              "title": "Number",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-company-id",
+            "required": true,
+            "schema": {
+              "title": "X-Company-Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-actor",
+            "required": false,
+            "schema": {
+              "default": "unknown",
+              "title": "X-Actor",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PortalWriteOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The request could not be understood"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The caller is not identified"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The caller may not do this"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The company, document or route does not exist"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The request clashes with one already made"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The request did not match the contract, or a domain rule refused it"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The platform failed unexpectedly"
+          }
+        },
+        "summary": "Portal Acknowledge Order",
+        "tags": [
+          "portal"
+        ]
+      }
+    },
+    "/api/v1/portal/rfqs/{number}/responses": {
+      "post": {
+        "description": "Submit this supplier's answer \u2014 the same record an internally captured one is.",
+        "operationId": "portal_rfq_response_api_v1_portal_rfqs__number__responses_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "number",
+            "required": true,
+            "schema": {
+              "title": "Number",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-company-id",
+            "required": true,
+            "schema": {
+              "title": "X-Company-Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-actor",
+            "required": false,
+            "schema": {
+              "default": "unknown",
+              "title": "X-Actor",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PortalResponseIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PortalWriteOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The request could not be understood"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The caller is not identified"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The caller may not do this"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The company, document or route does not exist"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The request clashes with one already made"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The request did not match the contract, or a domain rule refused it"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The platform failed unexpectedly"
+          }
+        },
+        "summary": "Portal Rfq Response",
+        "tags": [
+          "portal"
+        ]
+      }
+    },
     "/api/v1/pos/cash-drawer-policy": {
       "post": {
         "description": "State, change or withdraw whether this company's tills need an open shift.",
@@ -8101,6 +9458,267 @@
         ]
       }
     },
+    "/api/v1/pos/sync": {
+      "post": {
+        "description": "Replay a terminal's queued sales \u2014 retry-safe by key *and* by the till's numbers.\n\nThe whole queue is one report, and each sale in it is completed through\nT-3.POS.01's own calls, so what a synced sale posts is what an online one posts.\nA sale the location cannot fill is refused and named in the report rather than\ncompleting against a negative location.",
+        "operationId": "sync_pos_sales_api_v1_pos_sync_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "title": "Idempotency-Key",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-company-id",
+            "required": true,
+            "schema": {
+              "title": "X-Company-Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-actor",
+            "required": false,
+            "schema": {
+              "default": "unknown",
+              "title": "X-Actor",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PosSyncIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PosSyncOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The request could not be understood"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The caller is not identified"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The caller may not do this"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The company, document or route does not exist"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The request clashes with one already made"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The request did not match the contract, or a domain rule refused it"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The platform failed unexpectedly"
+          }
+        },
+        "summary": "Sync Pos Sales",
+        "tags": [
+          "pos"
+        ]
+      }
+    },
+    "/api/v1/pos/sync/reports": {
+      "get": {
+        "description": "The company's sync runs (one terminal's, where one is named), oldest first.",
+        "operationId": "list_pos_sync_reports_api_v1_pos_sync_reports_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "terminal",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Terminal"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-company-id",
+            "required": true,
+            "schema": {
+              "title": "X-Company-Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-actor",
+            "required": false,
+            "schema": {
+              "default": "unknown",
+              "title": "X-Actor",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PosSyncReportsOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The request could not be understood"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The caller is not identified"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The caller may not do this"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The company, document or route does not exist"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The request clashes with one already made"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The request did not match the contract, or a domain rule refused it"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The platform failed unexpectedly"
+          }
+        },
+        "summary": "List Pos Sync Reports",
+        "tags": [
+          "pos"
+        ]
+      }
+    },
     "/api/v1/pos/z-reports/day": {
       "get": {
         "description": "The day's Z-Report: every shift of that day, added exactly.",
@@ -9224,9 +10842,122 @@
         ]
       }
     },
+    "/api/v1/reports/catalogue": {
+      "get": {
+        "description": "What can be scheduled, with each report's scope, period and capability.\n\nRead rather than delivered: an operator scheduling the month-end pack needs to know what\nthe platform produces and what it takes to see each one (T-6.ANALYTICS.02). What is\n*registered* for this company is `report_definition`'s own rows.",
+        "operationId": "read_report_catalogue_api_v1_reports_catalogue_get",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "x-company-id",
+            "required": true,
+            "schema": {
+              "title": "X-Company-Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-actor",
+            "required": false,
+            "schema": {
+              "default": "unknown",
+              "title": "X-Actor",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CatalogueOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The request could not be understood"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The caller is not identified"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The caller may not do this"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The company, document or route does not exist"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The request clashes with one already made"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The request did not match the contract, or a domain rule refused it"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The platform failed unexpectedly"
+          }
+        },
+        "summary": "Read Report Catalogue",
+        "tags": [
+          "reporting"
+        ]
+      }
+    },
     "/api/v1/reports/{code}/run": {
       "post": {
-        "description": "Run one registered report for this company, and deliver it to its recipients.\n\nThe capability the definition carries is asked for by the framework itself\n(T-0.REPORT.01), so a caller who may not see the report is refused before\nanything is built \u2014 and a builder that fails leaves a `failed` run, not a\nsilent absence.",
+        "description": "Run one registered report for this company and period, and deliver it to its recipients.\n\nThe capability the definition carries is asked for by the framework itself\n(T-0.REPORT.01), so a caller who may not see the report is refused before\nanything is built \u2014 and a builder that fails leaves a `failed` run, not a\nsilent absence. Running a period that was already delivered leaves a `skipped`\nrun and sends nothing: the same report for the same period does not arrive twice,\nwhile a period that *failed* is retried as an ordinary run.",
         "operationId": "run_report_now_api_v1_reports__code__run_post",
         "parameters": [
           {
@@ -9236,6 +10967,23 @@
             "schema": {
               "title": "Code",
               "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "period",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "date",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Period"
             }
           },
           {

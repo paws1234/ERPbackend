@@ -111,6 +111,23 @@ from app.procurement.requisitions import (
     RequisitionError,
     requisition_by_number,
 )
+from app.procurement.orders import (
+    PurchaseOrder,
+    order_by_number as purchase_order_by_number,
+)
+from app.procurement.portal import (
+    CAPABILITY as portal_capability,
+)
+from app.procurement.portal import (
+    NoPortalAccountError as NoPortalAccount,
+    NotYoursError as PortalNotYours,
+    PortalError,
+    account_for as portal_account_for,
+    acknowledge_order_for as portal_acknowledge,
+    documents_for as portal_documents,
+    respond_to_rfq as portal_respond,
+    submit_invoice as portal_submit_invoice,
+)
 from app.procurement.rfq import (
     RfqError,
     invited as rfq_invited,
@@ -119,8 +136,11 @@ from app.procurement.rfq import (
     responses as rfq_responses,
     rfq_by_number,
 )
+from app.catalogue import entries as catalogue_entries  # noqa: E402
 from app.reporting import (
     DEFAULT_CAPABILITY as DEFAULT_REPORT_CAPABILITY,
+    MONTH as DEFAULT_REPORT_PERIOD,
+    PeriodError,
     ReportDefinition,
     register as register_report,
     run as run_report,
@@ -192,10 +212,16 @@ from app.ar.exposure import ExposureError
 from app.ar.gateway import GatewayError
 from app.ar.invoices import InvoiceError
 from app.ar.reconciliation import ReconciliationError as ArReconciliationError
+from app.analytics import UnknownTileError, WindowError, dashboard as dashboard_tiles
 from app.ar.recurring import RecurringError
 from app.sales.tax import TaxError
 from app.pos.drawer import DrawerError
 from app.pos.drawer import record_movement
+from app.pos.offline import (
+    report_of as sync_report_rows,
+    reports_of as sync_reports,
+    sync_sales,
+)
 from app.pos.reconciliation import reconcile as reconcile_pos
 from app.pos.reports import ReportError, day_report, shift_report, void_sale
 from app.pos.sales import (
@@ -454,22 +480,88 @@ class ReportIn(BaseModel):
     # Absent means the framework's default (`report.read`) — an optional field
     # must also be nullable, so it is stated as such rather than defaulted here.
     capability: str | None = None
+    # What one run covers: `day`, `month`, `quarter` or `year` (T-6.ANALYTICS.02).
+    period: str | None = None
 
 
 class ReportOut(BaseModel):
     code: str
     name: str
     schedule: str
+    period: str
     capability: str
     recipients: list[str]
+
+
+class CatalogueEntryOut(BaseModel):
+    """One report an operator can schedule: what it covers, over how long, and who may."""
+
+    code: str
+    name: str
+    kind: str
+    scope: str
+    capability: str
+    schedule: str
+    period: str
+    built: bool
+
+
+class CatalogueOut(BaseModel):
+    entries: list[CatalogueEntryOut]
+
+
+class WithheldRecipientOut(BaseModel):
+    """A recipient the run did not deliver to, and why — a subject without the capability."""
+
+    recipient: str
+    reason: str
 
 
 class ReportRunOut(BaseModel):
     code: str
     status: str
+    period: date | None = None
     produced: dict[str, Any] | None = None
     error: str | None = None
     delivered_to: list[str] | None = None
+    withheld_recipients: list[WithheldRecipientOut] | None = None
+
+
+class DashboardTileOut(BaseModel):
+    """One figure, what it has to agree with, and (when asked) the rows behind it."""
+
+    code: str
+    label: str
+    capability: str
+    figures: dict[str, Any]
+    reconciled_to: dict[str, Any]
+    basis_label: str
+    # Present only for the tile the request asked to drill into: the rows the figure was
+    # computed from. Naming a field nobody asked for would make every dashboard call carry
+    # every ledger it reads.
+    basis: list[dict[str, Any]] | None = None
+    # How many rows stand behind the figure, and whether `basis` was cut to fit: a reader
+    # closing a dashboard onto a ledger of ten thousand invoices needs to know.
+    basis_rows: int | None = None
+    basis_truncated: bool | None = None
+
+
+class DashboardWithheldOut(BaseModel):
+    """A tile this subject may not see: named, with the refusal's own sentence and no figure."""
+
+    code: str
+    label: str
+    capability: str
+    reason: str
+
+
+class DashboardOut(BaseModel):
+    as_of: date
+    start: date
+    generated_at: datetime
+    drill_down: str | None = None
+    tiles: list[DashboardTileOut]
+    withheld: list[DashboardWithheldOut]
 
 
 class HealthOut(BaseModel):
@@ -516,9 +608,12 @@ class ApiIdempotencyKey(Base):
     """The answer a posted request already gave, so a retry can repeat it.
 
     Scoped to the company and unique on the key, so two companies cannot see each
-    other's keys and one key cannot answer twice with different results. Written
-    in the caller's transaction: a document that fails stores no key, and a
-    retried document finds the key it wrote.
+    other's keys and one key cannot answer twice with different results. The row records
+    the **method, path and actor** that used the key, not only the body: a key is one
+    caller's retry token, and a replay is answered only to the same caller asking the same
+    endpoint — otherwise a key would hand one caller another's document. Written in the
+    caller's transaction: a document that fails stores no key, and a retried document finds
+    the key it wrote.
     """
 
     __tablename__ = "api_idempotency_key"
@@ -533,6 +628,9 @@ class ApiIdempotencyKey(Base):
     key: Mapped[str] = mapped_column(String(200), nullable=False)
     method: Mapped[str] = mapped_column(String(8), nullable=False)
     path: Mapped[str] = mapped_column(String(128), nullable=False)
+    # Whose retry this key is. Compared on replay, so a second caller presenting someone
+    # else's key is refused instead of being shown the answer to a request they did not make.
+    actor: Mapped[str] = mapped_column(String(64), nullable=False)
     # The request's body, hashed: the same key with a different body is a client
     # bug, not a retry, and is refused rather than answered.
     fingerprint: Mapped[str] = mapped_column(String(64), nullable=False)
@@ -796,6 +894,16 @@ async def _fulfilment_error(_request: Request, exc: FulfilmentError) -> JSONResp
     return _error(422, "fulfilment_error", str(exc))
 
 
+@app.exception_handler(NoPortalAccount)
+async def _no_portal_account(_request: Request, exc: NoPortalAccount) -> JSONResponse:
+    return _error(403, "no_portal_account", str(exc))
+
+
+@app.exception_handler(PortalError)
+async def _portal_error(_request: Request, exc: PortalError) -> JSONResponse:
+    return _error(422, "portal_error", str(exc))
+
+
 @app.exception_handler(PosError)
 async def _pos_error(_request: Request, exc: PosError) -> JSONResponse:
     return _error(422, "pos_error", str(exc))
@@ -925,25 +1033,49 @@ def register_report_definition(payload: ReportIn, context: Context) -> ReportOut
         schedule=payload.schedule,
         recipients=list(payload.recipients),
         capability=payload.capability or DEFAULT_REPORT_CAPABILITY,
+        period=payload.period or DEFAULT_REPORT_PERIOD,
     )
     session.commit()
     return ReportOut(
         code=definition.code,
         name=definition.name,
         schedule=definition.schedule,
+        period=definition.period,
         capability=definition.capability,
         recipients=list(definition.recipients),
     )
 
 
+@app.get(f"{BASE}/reports/catalogue", response_model=CatalogueOut, tags=["reporting"])
+def read_report_catalogue(context: Context) -> CatalogueOut:
+    """What can be scheduled, with each report's scope, period and capability.
+
+    Read rather than delivered: an operator scheduling the month-end pack needs to know what
+    the platform produces and what it takes to see each one (T-6.ANALYTICS.02). What is
+    *registered* for this company is `report_definition`'s own rows.
+    """
+    require(
+        context.session,
+        company_id=context.company_id,
+        subject=context.actor,
+        capability="report.read",
+        entity="report_catalogue",
+    )
+    return CatalogueOut(entries=[CatalogueEntryOut(**entry) for entry in catalogue_entries()])
+
+
 @app.post(f"{BASE}/reports/{{code}}/run", response_model=ReportRunOut, tags=["reporting"])
-def run_report_now(code: str, context: Context) -> ReportRunOut:
-    """Run one registered report for this company, and deliver it to its recipients.
+def run_report_now(
+    code: str, context: Context, period: Annotated[date | None, Query()] = None
+) -> ReportRunOut:
+    """Run one registered report for this company and period, and deliver it to its recipients.
 
     The capability the definition carries is asked for by the framework itself
     (T-0.REPORT.01), so a caller who may not see the report is refused before
     anything is built — and a builder that fails leaves a `failed` run, not a
-    silent absence.
+    silent absence. Running a period that was already delivered leaves a `skipped`
+    run and sends nothing: the same report for the same period does not arrive twice,
+    while a period that *failed* is retried as an ordinary run.
     """
     session = context.session
     definition = session.scalar(
@@ -955,15 +1087,58 @@ def run_report_now(code: str, context: Context) -> ReportRunOut:
         raise ApiError(
             404, "report_not_configured", f"no report {code!r} is registered for this company"
         )
-    run_row = run_report(session, definition, actor=context.actor)
+    try:
+        run_row = run_report(session, definition, actor=context.actor, period=period)
+    except PeriodError as exc:
+        raise ApiError(422, "invalid_period", str(exc)) from exc
     session.commit()
     return ReportRunOut(
         code=code,
         status=run_row.status,
+        period=run_row.period,
         produced=run_row.produced,
         error=run_row.error,
         delivered_to=list(run_row.delivered_to) if run_row.delivered_to else None,
+        withheld_recipients=(
+            [WithheldRecipientOut(**row) for row in run_row.withheld_recipients]
+            if run_row.withheld_recipients
+            else None
+        ),
     )
+
+
+# --- T-6.ANALYTICS.01: the dashboard ------------------------------------------
+
+
+@app.get(f"{BASE}/dashboard", response_model=DashboardOut, tags=["reporting"])
+def read_dashboard(
+    context: Context,
+    as_of: Annotated[date | None, Query()] = None,
+    start: Annotated[date | None, Query()] = None,
+    drill_down: Annotated[str | None, Query()] = None,
+) -> DashboardOut:
+    """The tiles this subject may see, with the records behind one of them.
+
+    Read fresh on every request and stamped with its own `generated_at`, so what a reader
+    sees is the ledger as it stands rather than a snapshot from last night. A tile the
+    caller may not see is absent and named in `withheld` with the refusal's sentence — the
+    figure is not zeroed — and the refusal is on the trail like every other. Asking for a
+    tile's `drill_down` returns the rows that figure was computed from, in one step.
+    """
+    try:
+        answer = dashboard_tiles(
+            context.session,
+            company_id=context.company_id,
+            subject=context.actor,
+            as_of=as_of,
+            start=start,
+            drill_down=drill_down,
+        )
+    except UnknownTileError as exc:
+        raise ApiError(404, "no_dashboard_tile", str(exc)) from exc
+    except WindowError as exc:
+        raise ApiError(422, "invalid_window", str(exc)) from exc
+    return DashboardOut(**answer)
 
 
 @app.post(f"{BASE}/currencies", response_model=CurrencyOut, status_code=201, tags=["currency"])
@@ -1242,6 +1417,12 @@ def post_entry(
                 "idempotency_key_reused",
                 f"key {idempotency_key!r} was used for a different body",
             )
+        if (seen.method, seen.path, seen.actor) != ("POST", path, context.actor):
+            raise ApiError(
+                409,
+                "idempotency_key_reused",
+                f"key {idempotency_key!r} belongs to another caller's request",
+            )
         # The retry gets the first answer, marked as a replay, and nothing is
         # posted a second time. The stored body is the whole record; what this
         # caller may see of it is decided per request, below.
@@ -1280,6 +1461,7 @@ def post_entry(
             key=idempotency_key,
             method="POST",
             path=path,
+            actor=context.actor,
             fingerprint=fingerprint,
             status_code=201,
             body=json.dumps(body),
@@ -3078,6 +3260,110 @@ class PosVoidIn(BaseModel):
     reason: str = Field(min_length=1, max_length=200)
 
 
+# --- T-6.PORTAL.01 — the supplier's own door ---------------------------------
+
+
+class PortalLineIn(BaseModel):
+    """One line a supplier states: the RFQ's own line number, or an invoice line."""
+
+    line_no: int = Field(ge=1)
+    unit_price: str
+    quantity: str | None = None
+    description: str | None = None
+
+
+class PortalResponseIn(BaseModel):
+    """A supplier's answer to an RFQ, line by line."""
+
+    received_on: date
+    lines: list[PortalLineIn] = Field(min_length=1)
+    currency: str | None = None
+    lead_time_days: int | None = None
+    valid_until: date | None = None
+    note: str | None = None
+
+
+class PortalInvoiceIn(BaseModel):
+    """A supplier's invoice against an order, as it is submitted."""
+
+    number: str = Field(min_length=1, max_length=32)
+    invoice_date: date
+    supplier_reference: str = Field(min_length=1, max_length=64)
+    lines: list[PortalLineIn] = Field(min_length=1)
+    order_number: str | None = None
+
+
+class PortalDocumentsOut(BaseModel):
+    """What this supplier may see: its RFQs, its orders and its invoices."""
+
+    documents: dict
+
+
+class PortalWriteOut(BaseModel):
+    """What a portal write recorded, as the supplier reads it back."""
+
+    recorded: dict
+
+
+# --- T-6.OFFLINE.01 — the queue a terminal replays when it is back online ------
+
+
+class PosSyncLineIn(BaseModel):
+    """One queued line as the till rang it: the code, the shelf price and how many."""
+
+    barcode: str = Field(min_length=1, max_length=64)
+    base_price: str
+    quantity: str | None = None
+    uom: str | None = None
+    campaign: str | None = None
+
+
+class PosSyncTenderIn(BaseModel):
+    """One queued payment: what kind, how much, and its reference."""
+
+    tender_type: str
+    amount: str
+    reference: str | None = None
+
+
+class PosSyncSaleIn(BaseModel):
+    """One sale rung up while the terminal was away, under the number the till gave it."""
+
+    # The till's own number, which is what makes a re-sent batch land once: see the
+    # endpoint and `app.pos.offline`.
+    number: str = Field(min_length=1, max_length=32)
+    sold_on: date | None = None
+    customer_code: str | None = None
+    currency: str | None = None
+    lines: list[PosSyncLineIn] = Field(min_length=1)
+    tenders: list[PosSyncTenderIn] = Field(min_length=1)
+
+
+class PosSyncIn(BaseModel):
+    """A terminal's whole queue, and the policy it was trading under offline."""
+
+    terminal: str = Field(min_length=1, max_length=32)
+    location_code: str = Field(min_length=1, max_length=32)
+    # Whether the till was told it may sell beyond what its cached stock showed — stated
+    # on the report, because a shortfall reads differently under each policy. Absent
+    # means the terminal stated no policy, which is the conservative reading: it was not
+    # allowed to oversell.
+    oversell_allowed: bool | None = None
+    sales: list[PosSyncSaleIn] = Field(min_length=1)
+
+
+class PosSyncOut(BaseModel):
+    """The run's one reconciliation report: its counts, its outcomes and its differences."""
+
+    report: dict
+
+
+class PosSyncReportsOut(BaseModel):
+    """A terminal's sync runs, in the order it made them — one per run, never per sale."""
+
+    reports: list[dict]
+
+
 class PosLineOut(BaseModel):
     line_no: int
     description: str
@@ -3482,6 +3768,111 @@ def pos_reconciliation(
     )
 
 
+# --- T-6.OFFLINE.01: the terminal's queue, replayed ---------------------------
+
+
+@app.post(f"{BASE}/pos/sync", response_model=PosSyncOut, status_code=201, tags=["pos"])
+def sync_pos_sales(
+    payload: PosSyncIn,
+    context: Context,
+    idempotency_key: Annotated[str, Header(alias="Idempotency-Key")],
+) -> JSONResponse:
+    """Replay a terminal's queued sales — retry-safe by key *and* by the till's numbers.
+
+    The whole queue is one report, and each sale in it is completed through
+    T-3.POS.01's own calls, so what a synced sale posts is what an online one posts.
+    A sale the location cannot fill is refused and named in the report rather than
+    completing against a negative location.
+    """
+    session = context.session
+    require(
+        session,
+        company_id=context.company_id,
+        subject=context.actor,
+        capability="pos.sell",
+        entity="pos_sync_report",
+    )
+    location = location_by_code(
+        session, company_id=context.company_id, code=payload.location_code
+    )
+    fingerprint = _fingerprint(payload.model_dump(mode="json"))
+    path = f"{BASE}/pos/sync"
+    seen = session.scalar(
+        select(ApiIdempotencyKey).where(
+            ApiIdempotencyKey.company_id == context.company_id,
+            ApiIdempotencyKey.key == idempotency_key,
+        )
+    )
+    if seen is not None:
+        if seen.fingerprint != fingerprint:
+            raise ApiError(
+                409,
+                "idempotency_key_reused",
+                f"key {idempotency_key!r} was used for a different queue",
+            )
+        if (seen.method, seen.path, seen.actor) != ("POST", path, context.actor):
+            raise ApiError(
+                409,
+                "idempotency_key_reused",
+                f"key {idempotency_key!r} belongs to another caller's request",
+            )
+        return JSONResponse(
+            status_code=seen.status_code,
+            content=json.loads(seen.body),
+            headers={"Idempotent-Replay": "true"},
+        )
+
+    report = sync_sales(
+        session,
+        company_id=context.company_id,
+        terminal=payload.terminal,
+        location=location,
+        sales=[sale.model_dump(mode="json") for sale in payload.sales],
+        oversell_allowed=bool(payload.oversell_allowed),
+    )
+    # The contract wraps the report (`{"report": {...}}`); the stored body is the same
+    # wrapped answer, so a replay returns what the first call returned.
+    body = {"report": _jsonable(sync_report_rows(report))}
+    session.add(
+        ApiIdempotencyKey(
+            company_id=context.company_id,
+            key=idempotency_key,
+            method="POST",
+            path=path,
+            actor=context.actor,
+            fingerprint=fingerprint,
+            status_code=201,
+            body=json.dumps(body),
+        )
+    )
+    response = JSONResponse(status_code=201, content=body)
+    session.commit()
+    return response
+
+
+@app.get(f"{BASE}/pos/sync/reports", response_model=PosSyncReportsOut, tags=["pos"])
+def list_pos_sync_reports(
+    context: Context, terminal: Annotated[str | None, Query()] = None
+) -> PosSyncReportsOut:
+    """The company's sync runs (one terminal's, where one is named), oldest first."""
+    session = context.session
+    require(
+        session,
+        company_id=context.company_id,
+        subject=context.actor,
+        capability="pos.read",
+        entity="pos_sync_report",
+    )
+    return PosSyncReportsOut(
+        reports=[
+            _jsonable(sync_report_rows(report))
+            for report in sync_reports(
+                session, company_id=context.company_id, terminal=terminal
+            )
+        ]
+    )
+
+
 
 # --- T-5.EMP.02: the org chart ------------------------------------------------
 # The phase's one frontend consumer: the hierarchy is modelled in `app/hr/org.py`, and
@@ -3516,6 +3907,137 @@ class OrgChartOut(BaseModel):
     root_number: str | None = None
     entries: list[OrgChartEntryOut]
     unplaced: list[OrgChartUnplacedOut]
+
+
+# --- T-6.PORTAL.01: the supplier's own documents -----------------------------
+
+
+def _portal_scope(session: Session, context: RequestContext):
+    """The supplier this request acts for, and the capability that lets it in.
+
+    Both are needed and neither is implied by the other: the capability says the subject may
+    use the portal at all, and the account says *which* supplier it is. A subject with the
+    capability and no account is refused (403), not shown an empty page.
+    """
+    require(
+        session,
+        company_id=context.company_id,
+        subject=context.actor,
+        capability=portal_capability,
+        entity="supplier_portal_account",
+    )
+    return portal_account_for(session, company_id=context.company_id, subject=context.actor)
+
+
+@app.get(f"{BASE}/portal/documents", response_model=PortalDocumentsOut, tags=["portal"])
+def portal_view(context: Context) -> PortalDocumentsOut:
+    """Everything this supplier may see — its RFQs, its released orders and its invoices."""
+    session = context.session
+    account = _portal_scope(session, context)
+    return PortalDocumentsOut(documents=_jsonable(portal_documents(session, account=account)))
+
+
+@app.post(
+    f"{BASE}/portal/rfqs/{{number}}/responses",
+    response_model=PortalWriteOut,
+    status_code=201,
+    tags=["portal"],
+)
+def portal_rfq_response(
+    number: str, payload: PortalResponseIn, context: Context
+) -> PortalWriteOut:
+    """Submit this supplier's answer — the same record an internally captured one is."""
+    session = context.session
+    account = _portal_scope(session, context)
+    response = portal_respond(
+        session,
+        account=account,
+        number=number,
+        lines=[
+            {
+                "line_no": line.line_no,
+                "unit_price": line.unit_price,
+                "quantity": line.quantity,
+            }
+            for line in payload.lines
+        ],
+        received_on=payload.received_on,
+        currency=payload.currency,
+        lead_time_days=payload.lead_time_days,
+        valid_until=payload.valid_until,
+        note=payload.note,
+    )
+    recorded = _jsonable(
+        {
+            "number": response.rfq.number,
+            "supplier": account.supplier.party.code,
+            "received_on": response.received_on,
+            "late": bool(response.late),
+            "lines": [
+                {"line_no": line.line_no, "unit_price": Decimal(line.unit_price)}
+                for line in response.lines
+            ],
+        }
+    )
+    session.commit()
+    return PortalWriteOut(recorded=recorded)
+
+
+@app.post(
+    f"{BASE}/portal/orders/{{number}}/acknowledge",
+    response_model=PortalWriteOut,
+    tags=["portal"],
+)
+def portal_acknowledge_order(number: str, context: Context) -> PortalWriteOut:
+    """Take one of this supplier's orders on — the domain's own transition, once."""
+    session = context.session
+    account = _portal_scope(session, context)
+    order = portal_acknowledge(session, account=account, number=number)
+    recorded = _jsonable(
+        {
+            "number": order.number,
+            "status": order.status,
+            "acknowledged": order.status == "acknowledged",
+        }
+    )
+    session.commit()
+    return PortalWriteOut(recorded=recorded)
+
+
+@app.post(
+    f"{BASE}/portal/invoices", response_model=PortalWriteOut, status_code=201, tags=["portal"]
+)
+def portal_invoice(payload: PortalInvoiceIn, context: Context) -> PortalWriteOut:
+    """Submit an invoice as a draft — posting and matching stay the buyer's review."""
+    session = context.session
+    account = _portal_scope(session, context)
+    invoice = portal_submit_invoice(
+        session,
+        account=account,
+        number=payload.number,
+        invoice_date=payload.invoice_date,
+        supplier_reference=payload.supplier_reference,
+        lines=[
+            {
+                "line_no": line.line_no,
+                "description": line.description or f"line {line.line_no}",
+                "quantity": line.quantity or "1",
+                "unit_price": line.unit_price,
+            }
+            for line in payload.lines
+        ],
+        order_number=payload.order_number,
+    )
+    recorded = _jsonable(
+        {
+            "number": invoice.number,
+            "status": invoice.status,
+            "gross_amount": Decimal(invoice.gross_amount),
+            "supplier": account.supplier.party.code,
+        }
+    )
+    session.commit()
+    return PortalWriteOut(recorded=recorded)
 
 
 @app.get(f"{BASE}/org-chart", response_model=OrgChartOut, tags=["hr"])

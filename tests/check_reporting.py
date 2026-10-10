@@ -134,7 +134,12 @@ def main() -> int:
         )
         register_builder(
             "trial_balance",
-            lambda session, definition: {"rows": 3, "debits": "100.00", "credits": "100.00"},
+            lambda session, definition, window: {
+                "rows": 3,
+                "debits": "100.00",
+                "credits": "100.00",
+                "period": window.start.isoformat(),
+            },
         )
         session.commit()
 
@@ -187,7 +192,7 @@ def main() -> int:
         session.commit()
         assert unbuilt.status == FAILED and "no builder is registered" in unbuilt.error
 
-        def explode(session: Session, definition) -> dict:
+        def explode(session: Session, definition, window) -> dict:
             raise BuilderFailed("the ledger is empty")
 
         register_builder("explodes", explode)

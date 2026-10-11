@@ -102,6 +102,24 @@ EXCLUDED = {
         "written with its workflow, which refuses a second configuration, so a level cannot"
         " change after the fact"
     ),
+    # T-7.AUTH.01 — identity. The trail files **every** row under a company
+    # (`audit_log.company_id` is NOT NULL), and these rows have no company to be filed
+    # under: identity is installation-level, because a request has to know who it is
+    # before any company is known (the session is what names the company). They are
+    # declared in `app/db.py`'s UNSCOPED_TABLES for the same reason — a table cannot be
+    # dropped into that list, or into this one, without stating why.
+    #
+    # What covers the ground instead: roles, capability grants, field restrictions and
+    # role assignments **are** company-scoped and therefore audited, so "who may do what
+    # in this company" is on the record; `user_session` is the sign-in record (who, from
+    # where, when, for which company, and when it was revoked); and every row here carries
+    # its own timestamps. `app/identity.py`'s docstring states the same thing where the
+    # tables are defined.
+    "app_user": "installation-level identity: no company owns the row, so the trail has none to file it under",
+    "user_session": "read before the company it names is known, so it cannot be scoped by one",
+    "user_membership": "says which companies a person may act in — for all of them at once",
+    "user_totp": "belongs to the person, not to a company",
+    "user_recovery_code": "belongs to the person, not to a company",
 }
 
 AUDIT_TRIGGER = "audit_row_change"

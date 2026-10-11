@@ -45,6 +45,8 @@ from sqlalchemy import create_engine, func, select
 from sqlalchemy.orm import Session
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from tests.identity import sign_in  # noqa: E402
+
 
 from app.api import BASE, app  # noqa: E402
 from app.company import Company  # noqa: E402
@@ -403,7 +405,7 @@ def main() -> int:
         # point: the API basket is priced by the engine's ordering, not by the till.
         scanned_gross = (Decimal("50") * VAT).quantize(Decimal("0.000001"))
         client = TestClient(app, raise_server_exceptions=False)
-        headers = {"X-Company-Id": str(COMPANY), "X-Actor": "maria"}
+        headers = sign_in(engine, company_id=COMPANY, actor="maria")
         opened = client.post(
             f"{BASE}/pos/sales",
             headers=headers,
@@ -441,7 +443,7 @@ def main() -> int:
         assert refused.json()["error"]["code"] == "pos_error", refused.json()
         unpermitted = client.post(
             f"{BASE}/pos/sales",
-            headers={**headers, "X-Actor": "nobody"},
+            headers=sign_in(engine, company_id=COMPANY, actor="nobody"),
             json={"number": "POS-API-2", "terminal": "T1", "location_code": till.code},
         )
         assert unpermitted.status_code == 403, unpermitted.text

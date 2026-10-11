@@ -65,10 +65,27 @@ $$;
 )
 
 
+def reinstallable(name: str, table: str, statement: str) -> DDL:
+    """The DDL for a named trigger of `table`, preceded by the DROP that makes it repeatable.
+
+    `create_all` installs each of these once, for the tables it creates, so the DROP was
+    never needed. Since T-8.MIG.01 the migration environment **replays these same
+    listeners** against a schema that already has them (so a migrated schema carries the
+    same triggers a `create_all` one does), and Postgres has no
+    ``CREATE TRIGGER IF NOT EXISTS``: without the DROP, the second install of a schema —
+    or the first migration on an existing one — fails on a duplicate trigger. Dropping first
+    is the same thing the scoping policy (`app/db.py`) and the trail trigger do, for the
+    same reason.
+    """
+    return DDL(f"DROP TRIGGER IF EXISTS {name} ON {table};\n{statement}")
+
+
 def _refusal_trigger(table, label: str, function: str, events: str) -> DDL:
-    return DDL(
+    return reinstallable(
+        f"{table.name}_{label}",
+        table.name,
         f"CREATE TRIGGER {table.name}_{label} BEFORE {events} ON {table.name}"
-        f" FOR EACH ROW EXECUTE FUNCTION {function}()"
+        f" FOR EACH ROW EXECUTE FUNCTION {function}()",
     )
 
 
@@ -340,13 +357,20 @@ def _audited(metadata) -> list:
     written only with their parent (``journal_line``) are not audited separately: they cannot
     change without it, and the parent's row already names the change, so a line's own trail
     row would be a duplicate.
+
+    ``UNSCOPED_TABLES`` are left out for a reason the trail imposes rather than one this
+    function chooses: every trail row is filed under a company (``company_id`` is NOT NULL),
+    and an installation-level identity row — a session, a membership — has no company to be
+    filed under. `tests/check_audit_coverage.py` requires each such table to be named with
+    its reason, so the exclusion is checked rather than assumed.
     """
-    from app.db import GLOBAL_TABLES
+    from app.db import GLOBAL_TABLES, UNSCOPED_TABLES
 
     return [
         table
         for table in metadata.tables.values()
         if table.name != TRAIL_TABLE
+        and table.name not in UNSCOPED_TABLES
         and (
             COMPANY_COLUMN in table.c
             or table.name in GLOBAL_TABLES

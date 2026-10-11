@@ -30,7 +30,8 @@ Green on all nine:
    that reads as open again, and a converted quotation that carries the customer's currency
 9. **the board can be driven through the published API** — §9 adds a stage, creates a card,
    moves it, loses it and converts a win through `POST /api/v1/…`, and asserts that the actor
-   and the instant a move records come from the **request** (`X-Actor` and the server's clock)
+   and the instant a move records come from the **authenticated session** and the
+   server's clock
    rather than from the body; a withheld field stays withheld in a mutation's answer too
 
 **Scratch database only**: it drops and recreates the public schema.
@@ -48,6 +49,8 @@ from sqlalchemy.exc import DBAPIError
 from sqlalchemy.orm import Session
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from tests.identity import sign_in  # noqa: E402
+
 
 from app.api import BASE, app  # noqa: E402
 from app.company import Company  # noqa: E402
@@ -529,8 +532,8 @@ def main() -> int:
         session.commit()
 
     client = TestClient(app, raise_server_exceptions=False)
-    headers = {"X-Company-Id": str(COMPANY), "X-Actor": "maria"}
-    intern = {**headers, "X-Actor": "intern"}
+    headers = sign_in(engine, company_id=COMPANY, actor="maria")
+    intern = sign_in(engine, company_id=COMPANY, actor="intern")
     stages_url = f"{BASE}/pipeline/stages"
     cards_url = f"{BASE}/opportunities"
 
@@ -660,7 +663,7 @@ def main() -> int:
     )
     nobody = client.post(
         cards_url,
-        headers={**headers, "X-Actor": "stranger"},
+        headers=sign_in(engine, company_id=COMPANY, actor="stranger"),
         json={"customer_code": "ACME", "name": "Nope", "owner": "jo"},
     )
     assert nobody.status_code == 403, nobody.text

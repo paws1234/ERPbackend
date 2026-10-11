@@ -31,6 +31,8 @@ from sqlalchemy import create_engine, func, select
 from sqlalchemy.orm import Session
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from tests.identity import sign_in  # noqa: E402
+
 
 from app.api import BASE, app  # noqa: E402
 from app.audit import AuditLog, read_trail  # noqa: E402
@@ -54,10 +56,10 @@ def _body(memo: str, party: str | None = None) -> dict:
     return {"posting_date": DAY, "currency": "PHP", "memo": memo, "lines": [line, other]}
 
 
-def _post(client: TestClient, company_id: uuid.UUID, actor: str, key: str, body: dict):
+def _post(client: TestClient, key: str, headers: dict, body: dict):
     return client.post(
         f"{BASE}/journal-entries",
-        headers={"X-Company-Id": str(company_id), "X-Actor": actor, "Idempotency-Key": key},
+        headers={**headers, "Idempotency-Key": key},
         json=body,
     )
 
@@ -110,24 +112,24 @@ def main() -> int:
         session.commit()
 
     client = TestClient(app, raise_server_exceptions=False)
-    headers = lambda actor: {"X-Company-Id": str(company_id), "X-Actor": actor}  # noqa: E731
+    headers = lambda actor: sign_in(engine, company_id=company_id, actor=actor)  # noqa: E731
 
     # 1 — no role, no posting: refused at the boundary
-    carol = _post(client, company_id, CAROL, "carol-1", _body("carol"))
+    carol = _post(client, "carol-1", headers(CAROL), _body("carol"))
     assert carol.status_code == 403, carol.text
     assert carol.json()["error"]["code"] == "forbidden", carol.text
     assert "no roles" in carol.json()["error"]["message"]
     print(f"carol, holding no role, is refused: {carol.json()['error']['message']}")
 
     # ... including a caller whose role exists but does not carry the capability
-    bob_posting = _post(client, company_id, BOB, "bob-1", _body("bob"))
+    bob_posting = _post(client, "bob-1", headers(BOB), _body("bob"))
     assert bob_posting.status_code == 403 and "auditor" in bob_posting.json()["error"]["message"]
     print(f"bob, an auditor, cannot post: {bob_posting.json()['error']['message']}")
     carol_read = client.get(f"{BASE}/journal-entries", headers=headers(CAROL))
     assert carol_read.status_code == 403, carol_read.text
 
     # 2 — a permitted caller posts, and reads the whole record back
-    allowed = _post(client, company_id, ALICE, "alice-1", _body("alice", party="ACME"))
+    allowed = _post(client, "alice-1", headers(ALICE), _body("alice", party="ACME"))
     assert allowed.status_code == 201, allowed.text
     assert allowed.json()["lines"][1]["party"] == "ACME"
     alice_read = client.get(f"{BASE}/journal-entries", headers=headers(ALICE)).json()
@@ -149,7 +151,7 @@ def main() -> int:
         restrict(session, accountant, entity="journal_line", field="party", can_write=False)
         session.commit()
 
-    refused_write = _post(client, company_id, ALICE, "alice-2", _body("alice again", party="ACME"))
+    refused_write = _post(client, "alice-2", headers(ALICE), _body("alice again", party="ACME"))
     assert refused_write.status_code == 403, refused_write.text
     assert "journal_line.party" in refused_write.json()["error"]["message"]
     with engine.connect() as connection:
@@ -164,7 +166,7 @@ def main() -> int:
         auditor = session.scalar(select(Role).where(Role.code == "auditor"))
         grant(session, auditor, "journal.post")
         session.commit()
-    bob_posts_now = _post(client, company_id, BOB, "bob-2", _body("bob posts now"))
+    bob_posts_now = _post(client, "bob-2", headers(BOB), _body("bob posts now"))
     assert bob_posts_now.status_code == 201, bob_posts_now.text
     print("granting the capability takes effect on the very next request")
 

@@ -45,6 +45,8 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
+from tests.identity import sign_in  # noqa: E402
+
 
 from fastapi.testclient import TestClient  # noqa: E402
 from sqlalchemy import create_engine, inspect, select  # noqa: E402
@@ -228,7 +230,7 @@ def main() -> int:
 
     # 1 and 3 — the database is served, through the app, on tables the installer created
     client = TestClient(app, raise_server_exceptions=False)
-    headers = {"X-Company-Id": str(company_id), "X-Actor": ADMIN}
+    headers = sign_in(engine, company_id=company_id, actor=ADMIN)
 
     served = client.get(f"{BASE}/companies/current", headers=headers)
     assert served.status_code == 200, f"the installed company is not served: {served.text}"

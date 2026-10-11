@@ -44,7 +44,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import Mapped, Session, mapped_column, relationship
 
-from app.audit import append_only
+from app.audit import append_only, reinstallable
 from app.db import Base
 from app.stock.items import Item, ItemError, ItemVariant, TraceabilityError
 from app.stock.locations import Location, require_leaf
@@ -155,12 +155,14 @@ $$;
 """
 )
 
-_LEAF_TRIGGER = DDL(
+_LEAF_TRIGGER = reinstallable(
+    "stock_entry_leaf_only",
+    "stock_ledger_entry",
     """
 CREATE TRIGGER stock_entry_leaf_only
     BEFORE INSERT ON stock_ledger_entry
     FOR EACH ROW EXECUTE FUNCTION stock_entry_leaf_only();
-"""
+""",
 )
 
 for _ddl in (_LEAF_FUNCTION, _LEAF_TRIGGER):

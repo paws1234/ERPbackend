@@ -35,7 +35,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import Mapped, Session, mapped_column, relationship
 
-from app.audit import SoftDeleteMixin, deny_hard_delete
+from app.audit import SoftDeleteMixin, deny_hard_delete, reinstallable
 from app.db import Base
 
 # The roles §5 names. No default: a party has the roles it was given, and a role
@@ -134,22 +134,26 @@ $$;
 """
 )
 
-_PARTY_TRIGGER = DDL(
+_PARTY_TRIGGER = reinstallable(
+    "party_must_hold_a_role",
+    "party",
     """
 CREATE CONSTRAINT TRIGGER party_must_hold_a_role
     AFTER INSERT OR UPDATE ON party
     DEFERRABLE INITIALLY DEFERRED
     FOR EACH ROW EXECUTE FUNCTION party_has_a_role();
-"""
+""",
 )
 
-_PARTY_ROLE_TRIGGER = DDL(
+_PARTY_ROLE_TRIGGER = reinstallable(
+    "party_role_must_leave_one",
+    "party_role",
     """
 CREATE CONSTRAINT TRIGGER party_role_must_leave_one
     AFTER INSERT OR UPDATE OR DELETE ON party_role
     DEFERRABLE INITIALLY DEFERRED
     FOR EACH ROW EXECUTE FUNCTION party_has_a_role();
-"""
+""",
 )
 
 for _ddl in (_PARTY_ROLE_FUNCTION, _PARTY_TRIGGER, _PARTY_ROLE_TRIGGER):

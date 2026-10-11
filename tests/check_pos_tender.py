@@ -41,6 +41,8 @@ from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from tests.identity import sign_in  # noqa: E402
+
 
 from app.company import Company  # noqa: E402
 from app.api import BASE, app  # noqa: E402
@@ -326,7 +328,7 @@ def main() -> int:
         assign(session, company_id=COMPANY, subject="maria", role=owner)
         session.commit()
         client = TestClient(app, raise_server_exceptions=False)
-        headers = {"X-Company-Id": str(COMPANY), "X-Actor": "maria"}
+        headers = sign_in(engine, company_id=COMPANY, actor="maria")
         over_the_api = client.post(
             f"{BASE}/pos/drawer-movements",
             headers=headers,

@@ -83,6 +83,7 @@ from app.stock.locations import create_location  # noqa: E402
 from app.stock.transactions import receive  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
 from tests.seed import seed_stock_accounts  # noqa: E402
+from tests.identity import sign_in  # noqa: E402
 
 COMPANY = uuid.uuid4()
 OTHER = uuid.uuid4()
@@ -353,8 +354,7 @@ def main() -> int:
         session.commit()
         client = TestClient(app, raise_server_exceptions=False)
         headers = {
-            "X-Company-Id": str(COMPANY),
-            "X-Actor": "maria",
+            **sign_in(engine, company_id=COMPANY, actor="maria"),
             "Idempotency-Key": "till-1-batch-9",
         }
         body = {
@@ -387,7 +387,9 @@ def main() -> int:
         assert set(clash.json()) == {"error"}, clash.json()
         assert clash.json()["error"]["code"] == "idempotency_key_reused", clash.json()
         unpermitted = client.post(
-            f"{BASE}/pos/sync", headers={**headers, "X-Actor": "nobody"}, json=body
+            f"{BASE}/pos/sync",
+            headers={**headers, **sign_in(engine, company_id=COMPANY, actor="nobody")},
+            json=body,
         )
         assert unpermitted.status_code == 403, unpermitted.text
         listed = client.get(

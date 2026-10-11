@@ -34,7 +34,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import Mapped, Session, mapped_column, relationship
 
-from app.audit import SoftDeleteMixin, deny_hard_delete, soft_delete
+from app.audit import SoftDeleteMixin, deny_hard_delete, reinstallable, soft_delete
 from app.db import Base
 
 # The four levels §2.2 names, from the top down. The order is the rule.
@@ -167,13 +167,15 @@ $$;
 """
 )
 
-_LEVELS_TRIGGER = DDL(
+_LEVELS_TRIGGER = reinstallable(
+    "location_tree_rules",
+    "location",
     """
 CREATE CONSTRAINT TRIGGER location_tree_rules
     AFTER INSERT OR UPDATE ON location
     DEFERRABLE INITIALLY DEFERRED
     FOR EACH ROW EXECUTE FUNCTION location_tree_rules();
-"""
+""",
 )
 
 for _ddl in (_LEVELS_FUNCTION, _LEVELS_TRIGGER):

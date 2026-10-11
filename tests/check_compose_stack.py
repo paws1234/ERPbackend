@@ -1,4 +1,4 @@
-"""T-0.DEPLOY.03 check — the stack comes up as three containers, and only the backend sees the data.
+"""T-0.DEPLOY.03 check — the stack comes up as four containers, and only the backend sees the data.
 
     POSTGRES_PASSWORD=... uv run --with 'sqlalchemy>=2.0' --with 'psycopg[binary]' \
         python tests/check_compose_stack.py
@@ -88,13 +88,25 @@ def main() -> int:
         compose_file(workdir, "up", "-d", "--wait", env=env)
         print(f"`docker compose up -d --wait` brought the stack up in {time.monotonic() - started:.1f}s")
 
-        # 1 and 5 — three containers, each reporting its health
+        # 1 and 5 — four containers, each reporting its health
         states = service_states(workdir, env)
-        assert set(states) == {"db", "backend", "frontend"}, f"the stack is not three services: {states}"
+        assert set(states) == {"db", "backend", "worker", "frontend"}, (
+            f"the stack is not four services: {states}"
+        )
         for service, row in states.items():
             assert row["State"] == "running", f"{service} is {row['State']}"
             assert row.get("Health") == "healthy", f"{service} is not healthy: {row.get('Health')}"
-        print("three services, all healthy:", ", ".join(sorted(states)))
+        # The worker runs the same image as the backend: one build per application, two
+        # commands. A worker sharing the backend's *service* would be a job inside a
+        # request's process, which is what T-8.WORK.01 put in its own container.
+        worker_image = run(["docker", "inspect", f"{PROJECT}-worker-1", "--format", "{{.Config.Image}}"]).stdout.strip()
+        backend_image = run(["docker", "inspect", f"{PROJECT}-backend-1", "--format", "{{.Config.Image}}"]).stdout.strip()
+        assert worker_image == backend_image, (
+            f"the worker runs {worker_image!r} and the backend {backend_image!r}"
+        )
+        worker_cmd = run(["docker", "inspect", f"{PROJECT}-worker-1", "--format", "{{json .Config.Cmd}}"]).stdout.strip()
+        assert "app.worker" in worker_cmd, f"the worker's command is not the worker: {worker_cmd}"
+        print("four services, all healthy:", ", ".join(sorted(states)))
 
         # 2 — the database was healthy before the backend started
         db_started = run(["docker", "inspect", f"{PROJECT}-db-1", "--format", "{{.State.StartedAt}}"]).stdout.strip()
@@ -173,7 +185,7 @@ def main() -> int:
         run(["docker", "rmi", BACKEND_IMAGE], check=False)
         run(["docker", "rmi", FRONTEND_IMAGE], check=False)
 
-    print("ok — one command brings up three healthy containers, and only the backend sees the database")
+    print("ok — one command brings up four healthy containers, and only the backend sees the database")
     return 0
 
 

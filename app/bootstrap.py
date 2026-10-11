@@ -3,7 +3,7 @@
     DATABASE_URL=postgresql+psycopg://... python -m app.bootstrap \\
         --company-code ACME --company-name "Acme Trading" \\
         --market philippines --fiscal-year-start-month 1 \\
-        --admin-subject you@example.com
+        --admin-subject you@example.com --admin-password '…'
 
 **Why this module exists.** Every task in the ledger was verified against a *check*, and a check
 builds its own schema with ``Base.metadata.create_all`` before it does anything (T-0.CORE.02).
@@ -13,30 +13,37 @@ every other route failed with ``relation ... does not exist``. The one script th
 stood in for an installer, ``tests/compose_seed.py``, lived in the test tree — not in the image,
 which copies ``app/`` alone — and grew stale there instead of being run.
 
-**What it does, in one transaction.** Create the schema (the company-scoping policies of
-:mod:`app.db` and the audit triggers of :mod:`app.audit` ride on the metadata's own
-``after_create`` hooks, so they land here rather than in a step of their own); create the
-company, stating its market, its fiscal calendar and its reporting currency; import that
-market's chart of accounts (T-0.LOC.01's pack); and, when a subject is named, give it the
-capabilities the application declares. One transaction for the rows, so a refusal — a company
-code already taken, a pack that leaves a section empty, a fiscal year start nobody has
+**What it does, in one transaction.** **Migrate**, then seed: the schema comes from
+``alembic upgrade head`` (T-8.MIG.01's tree, which also installs what is not a table — the
+company-scoping policies of :mod:`app.db`, the audit and ledger triggers of :mod:`app.audit`,
+and the queue's own tables — by replaying the metadata's own ``after_create`` listeners);
+then create the company, stating its market, its fiscal calendar and its reporting currency;
+import that market's chart of accounts (T-0.LOC.01's pack); and, when a subject is named, give
+it the capabilities the application declares. One transaction for the rows, so a refusal — a
+company code already taken, a pack that leaves a section empty, a fiscal year start nobody has
 confirmed — leaves nothing behind instead of half an install.
 
-**What it deliberately is not.** Not a migration tool: ``create_all`` adds the tables it does
-not find and never alters one it does, which is the ceiling :mod:`app.db` records for the schema
-it builds. Not an HTTP route either — the capability model is per company, so a create-company
-request has no company to be scoped to and no role that could hold the capability; onboarding is
-an operator's command, where the operator is whoever holds the database credentials.
+**Not a migration tool, and no longer a schema builder.** ``create_all`` used to be how this
+installer made its schema, which meant every deployment started on a schema no migration
+described (finding 3 of the 2026-10-10 audit). The install now runs the migration tree, so an
+installation and a deployment upgrade walk the same path, and a second install of the same
+schema is a no-op because ``alembic upgrade head`` is. Not the only way to create a company,
+since T-7.ADMIN.03 added ``POST /api/v1/companies`` — but the *first* install still comes from
+here, because a create-company request needs a company to be scoped to and an administrator to
+hold the capability, and a fresh database has neither.
 
 **Ceilings, recorded rather than discovered later.**
 * The first administrator holds **every capability the application declares**, read out of the
   guards themselves (:func:`declared_capabilities`). That is a policy, and it is the honest one
-  available here: the first caller of a fresh install holds nothing, and there is no route that
-  manages roles, so an install without it answers ``403`` to everything with no way in.
-  ``--capability`` narrows it, and once the first administrator exists the ordinary model
-  applies — further roles, narrower grants, field restrictions (T-0.SEC.01).
+  available here: the first caller of a fresh install holds nothing, and although T-7.ADMIN.02
+  now serves the role routes, none of them can be reached before somebody holds the capability
+  they ask for. ``--capability`` narrows the first administrator, and once it exists the
+  ordinary model applies — further roles, narrower grants, field restrictions (T-0.SEC.01).
+* The administrator it creates needs a password to sign in (T-7.AUTH.04): ``--admin-password``,
+  or ``ERP_ADMIN_PASSWORD``. An install that names a subject and no password says so rather than
+  leaving an account nobody can use.
 * No TLS, reverse proxy or rate limit. Those stay the deployment stack's, as
-  ``SECURITY-REVIEW.md`` records.
+  ``SECURITY-REVIEW.md`` records; T-9.EDGE.01 puts the proxy in front of the application.
 """
 
 from __future__ import annotations
@@ -52,9 +59,16 @@ from pathlib import Path
 from sqlalchemy import Engine, create_engine, select
 from sqlalchemy.orm import Session
 
+from app import config
 from app.audit import set_actor
 from app.company import Company
-from app.db import Base, scope_to_company
+from app.db import scope_to_company
+from app.identity import (
+    add_membership,
+    create_user,
+    set_password,
+    user_by_login,
+)
 from app.ledger.accounts import import_coa_template
 from app.localization import PackError, company_template
 from app.localization import packs as installed_packs
@@ -62,6 +76,11 @@ from app.security import Role, assign, define_role, grant
 
 # Who the audit trail records for the install itself, unless the operator names someone.
 DEFAULT_ACTOR = "bootstrap"
+
+# The migration tree this install applies (T-8.MIG.01). The installer builds its Alembic
+# config from this file rather than from a copy of the settings, so the CLI an operator runs
+# and the install walk exactly the same tree.
+ALEMBIC_INI = Path(__file__).resolve().parent.parent / "alembic.ini"
 
 # The role the first administrator holds, as (code, name).
 ADMINISTRATOR = ("administrator", "Administrator")
@@ -124,24 +143,41 @@ def declared_capabilities() -> list[str]:
     return sorted(found)
 
 
+def run_migrations(engine: Engine) -> None:
+    """Apply the migration tree — the same ``alembic upgrade head`` an operator's CLI runs.
+
+    Built programmatically from `alembic.ini` and `migrations/`, with the URL taken from the
+    engine this install was given: the command-line tool and the installer therefore walk the
+    same tree, and there is no second copy of the DDL for one of them to fall behind on.
+    """
+    from alembic import command
+    from alembic.config import Config
+
+    config = Config(str(ALEMBIC_INI))
+    config.set_main_option("script_location", str(ALEMBIC_INI.parent / "migrations"))
+    config.set_main_option("sqlalchemy.url", engine.url.render_as_string(hide_password=False))
+    command.upgrade(config, "head")
+
+
 def create_schema(engine: Engine) -> list[str]:
-    """Create every table the models declare; return the modules that were imported for it.
+    """Bring the database to the schema this build declares; return the modules imported for it.
 
-    Importing every model module first is the whole trick: ``create_all`` builds what the shared
-    metadata knows, so a module nobody imported is a table nobody creates — and that failure
-    arrives as an error at the first request against the table, in production, rather than here.
+    Importing every model module first is the whole trick (and stays even though Alembic now
+    builds the tables from that same metadata): a module with a syntax error, or one whose
+    import fails, is a broken *install* rather than a surprise at the first request against
+    its table. The Alembic environment imports them too, in its own process.
 
-    Idempotent — and that is a property that had to be built, not assumed. ``create_all`` checks
-    before it creates, but the DDL that rides on the metadata's ``after_create`` hooks runs on
-    *every* call, not only on a table's own creation: the scoping policies (:mod:`app.db`) and
-    the audit triggers (:mod:`app.audit`). Both now replace what they find rather than failing on
-    it, so a second install is a no-op instead of ``DuplicateObject`` — which is what a failed
-    install, retried, used to meet.
+    Idempotent — and that is a property that had to be built, not assumed. ``alembic upgrade
+    head`` on a database already at head does nothing, and the schema-wide DDL the migration
+    environment re-installs (policies, triggers) replaces what it finds rather than failing on
+    it. What *was* broken, and is the reason this function no longer calls ``create_all``:
+    T-0.DEPLOY.03's stack came up on a schema no migration described, so a deployment had no
+    supported way to change a table (finding 3 of the 2026-10-10 audit).
     """
     imported = model_modules()
     for name in imported:
         importlib.import_module(name)
-    Base.metadata.create_all(engine)
+    run_migrations(engine)
     return imported
 
 
@@ -213,12 +249,18 @@ def grant_administrator(
     company_id: uuid.UUID,
     subject: str,
     capabilities: list[str] | None = None,
+    password: str | None = None,
 ) -> Role:
     """Give one subject the capabilities the application declares, or the ones named.
 
     The role is a row like any other, so an install that wants to start narrower says so with
     ``capabilities`` — and everything after the first administrator is the ordinary model
     (T-0.SEC.01): further roles, narrower grants, field restrictions.
+
+    Since T-7.INST.01 the subject is also given the **identity** that can use the role: a user
+    row, a membership of this company, and — when a password is stated — a credential. Before
+    that, an install named a subject that no sign-in could ever produce, so the administrator
+    it created was a role nobody could hold.
     """
     admin = str(subject).strip()
     if not admin:
@@ -230,6 +272,21 @@ def grant_administrator(
         raise BootstrapError(
             "no capabilities were found to grant, so the install would refuse every request —"
             " the application's guards declare none"
+        )
+    user = user_by_login(session, admin)
+    if user is None:
+        email = admin if "@" in admin else None
+        user = create_user(session, login=admin, email=email, display_name=admin)
+    add_membership(session, user=user, company_id=company_id)
+    if password is not None:
+        set_password(session, user, password)
+    elif user.password_hash is None:
+        # Stated rather than left implicit: the role is granted and the identity exists, but
+        # nobody can sign in as it yet. An operator that wants a usable install states the
+        # password (--admin-password), which is the ordinary path.
+        print(
+            f"note: {admin!r} has no password yet, so it cannot sign in until one is set",
+            file=sys.stderr,
         )
     role = define_role(
         session, company_id=company_id, code=ADMINISTRATOR[0], name=ADMINISTRATOR[1]
@@ -248,17 +305,22 @@ def bootstrap(
     fiscal_year_start_month: int | None = None,
     base_currency: str | None = None,
     admin_subject: str | None = None,
+    admin_password: str | None = None,
     capabilities: list[str] | None = None,
     actor: str = DEFAULT_ACTOR,
 ) -> uuid.UUID:
     """Install: the schema, one company with its chart, and — when a subject is named — its first
-    administrator. Returns the company id, which is what a client states as ``X-Company-Id``.
+    administrator with the identity that can use it. Returns the company id, which the install
+    prints for the operator; a client no longer states it, because the session does
+    (T-7.AUTH.02).
 
-    The schema is created outside the transaction the rows are written in: DDL is not rolled back
-    with the rows, and leaving the tables behind is a state a retry handles (``create_all`` is
-    idempotent). The company and everything filed under it are one transaction, so an install is
-    all or nothing.
+    The schema is migrated outside the transaction the rows are written in: DDL is not rolled
+    back with the rows, and leaving a migrated-but-empty schema behind is a state a retry
+    handles (`alembic upgrade head` on a database already at head does nothing). The company and
+    everything filed under it are one transaction, so an install is all or nothing.
     """
+    if admin_password is not None and not admin_subject:
+        raise BootstrapError("a password is only meaningful with --admin-subject")
     create_schema(engine)
     with Session(engine) as session:
         # The trail records who installed the platform, like every other change.
@@ -277,6 +339,7 @@ def bootstrap(
                 company_id=company.id,
                 subject=admin_subject,
                 capabilities=capabilities,
+                password=admin_password,
             )
         session.commit()
         return company.id
@@ -320,6 +383,13 @@ def main(argv: list[str] | None = None) -> int:
         help="the subject the first administrator's role is assigned to (omit for a company with no administrator)",
     )
     parser.add_argument(
+        "--admin-password",
+        help=(
+            "the password that subject signs in with; without it the administrator exists but"
+            " nobody can sign in as it"
+        ),
+    )
+    parser.add_argument(
         "--capability",
         action="append",
         dest="capabilities",
@@ -336,15 +406,9 @@ def main(argv: list[str] | None = None) -> int:
     )
     args = parser.parse_args(argv)
 
-    url = os.environ.get("DATABASE_URL")
-    if not url:
-        print(
-            "DATABASE_URL is required: the install has to be told which database to build",
-            file=sys.stderr,
-        )
-        return 2
-
-    engine = create_engine(url)
+    # The URL is read (and validated) at start by `app/config.py`: a malformed one has
+    # already stopped the process, naming the variable, rather than reaching the driver.
+    engine = create_engine(config.SETTINGS.database_url)
     try:
         company_id = bootstrap(
             engine,
@@ -354,6 +418,7 @@ def main(argv: list[str] | None = None) -> int:
             fiscal_year_start_month=args.fiscal_year_start_month,
             base_currency=args.base_currency,
             admin_subject=args.admin_subject,
+            admin_password=args.admin_password or os.environ.get("ERP_ADMIN_PASSWORD"),
             capabilities=args.capabilities,
             actor=args.actor,
         )
@@ -368,6 +433,12 @@ def main(argv: list[str] | None = None) -> int:
             f"{len(args.capabilities) if args.capabilities else len(declared_capabilities())}"
             " capability(ies) in it"
         )
+        if not (args.admin_password or os.environ.get("ERP_ADMIN_PASSWORD")):
+            print(
+                "no --admin-password (or ERP_ADMIN_PASSWORD) was given, so that administrator"
+                " cannot sign in yet",
+                file=sys.stderr,
+            )
     return 0
 
 

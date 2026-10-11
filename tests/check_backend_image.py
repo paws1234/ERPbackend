@@ -38,8 +38,10 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from app.company import Company  # noqa: E402
 from app.db import Base  # noqa: E402
+from app.identity import create_user  # noqa: E402
 from app.ledger import posting  # noqa: E402,F401 — every check builds the one schema
 from app.security import assign, define_role, grant  # noqa: E402
+from tests.identity import CHECK_PASSWORD  # noqa: E402
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 IMAGE = "erpv1-backend:deploy-check"
@@ -81,6 +83,15 @@ def main() -> int:
         role = define_role(session, company_id=company_id, code="checker", name="Checker")
         grant(session, role, "company.read")
         assign(session, company_id=company_id, subject="alice", role=role)
+        # T-7.AUTH.02: the container authenticates like any other client, so the caller
+        # the check drives it with needs a credential, not just a role.
+        create_user(
+            session,
+            login="alice",
+            password=CHECK_PASSWORD,
+            display_name="Alice",
+            companies=[company_id],
+        )
         session.commit()
 
     # 3 — a secret in the build context must not reach the image
@@ -181,9 +192,14 @@ def main() -> int:
             "python",
             "-c",
             "import json, urllib.request;"
-            f"r = urllib.request.Request('http://127.0.0.1:8000/api/v1/companies/current',"
-            f" headers={{'X-Company-Id': '{company_id}', 'X-Actor': 'alice'}});"
-            "print(json.load(urllib.request.urlopen(r))['code'])",
+            "body = json.dumps({'login': 'alice', 'password': %r}).encode();"
+            "login = urllib.request.Request("
+            "'http://127.0.0.1:8000/api/v1/auth/login', data=body,"
+            " headers={'Content-Type': 'application/json'});"
+            "cookie = urllib.request.urlopen(login).headers['Set-Cookie'].split(';')[0];"
+            "scoped = urllib.request.Request("
+            "'http://127.0.0.1:8000/api/v1/companies/current', headers={'Cookie': cookie});"
+            "print(json.load(urllib.request.urlopen(scoped))['code'])" % CHECK_PASSWORD,
         ).stdout.strip()
         assert scoped == "IMAGE-CHECK", f"the container did not read the database: {scoped}"
         print(f"the container answered health, served the contract ({contract} bytes) and read the database")

@@ -36,6 +36,8 @@ from sqlalchemy import create_engine, func, select
 from sqlalchemy.orm import Session
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from tests.identity import sign_in  # noqa: E402
+
 
 from app.api import BASE, app  # noqa: E402
 from app.ap.aging import aging  # noqa: E402
@@ -273,7 +275,7 @@ def main() -> int:
         client = TestClient(app, raise_server_exceptions=False)
         read = client.get(
             f"{BASE}/rfqs/RFQ-G1",
-            headers={"X-Company-Id": str(COMPANY), "X-Actor": "bob.buyer"},
+            headers=sign_in(engine, company_id=COMPANY, actor="bob.buyer"),
         )
         assert read.status_code == 200, read.text
         statement = read.json()

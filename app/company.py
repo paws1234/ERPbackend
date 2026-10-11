@@ -30,6 +30,12 @@ DEFAULT_COSTING_METHOD = "moving_average"
 # not a synonym for `off`.
 CREDIT_CHECK_MODES = ("off", "warn", "block")
 
+# Whether a company is trading (T-7.ADMIN.03). A suspended company keeps every row it
+# owns — the ledger stays readable and the trail stays whole — but nobody signs into it
+# and nothing in it may be changed. Not a soft delete: suspension is reversible, which
+# is the whole point of having it.
+COMPANY_STATUSES = ("active", "suspended")
+
 
 class UnknownCompanyError(ValueError):
     """A posting or lookup named a company that does not exist."""
@@ -37,6 +43,10 @@ class UnknownCompanyError(ValueError):
 
 class UnknownCreditCheckMode(ValueError):
     """A credit-check mode that is not one of the three the plan names."""
+
+
+class UnknownCompanyStatus(ValueError):
+    """A company status that is neither `active` nor `suspended`."""
 
 
 class Company(SoftDeleteMixin, Base):
@@ -65,12 +75,23 @@ class Company(SoftDeleteMixin, Base):
             + ")",
             name="ck_company_credit_check_mode",
         ),
+        CheckConstraint(
+            "status IN (" + ", ".join(f"'{status}'" for status in COMPANY_STATUSES) + ")",
+            name="ck_company_status",
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
     # Short human key, unique across the installation — what a person types.
     code: Mapped[str] = mapped_column(String(16), nullable=False, unique=True)
     name: Mapped[str] = mapped_column(String(128), nullable=False)
+    # Whether this company is trading (T-7.ADMIN.03). A suspended company keeps every
+    # row it owns — the ledger stays whole and readable — but nobody signs into it and
+    # nothing in it may be changed. `active` is the default because that is what a
+    # company is when it is created; suspension is the deliberate act.
+    status: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="active", server_default="active"
+    )
     # Reporting currency of this company (variable `base_currency`).
     base_currency: Mapped[str] = mapped_column(String(3), nullable=False)
     # Fiscal calendar, per company: the month its fiscal year opens in. The 1st is
@@ -183,5 +204,23 @@ def set_credit_check_mode(session, company: Company, *, mode: str | None) -> Com
             f" {', '.join(CREDIT_CHECK_MODES)}, or null for no policy agreed"
         )
     company.credit_check_mode = wanted
+    session.flush()
+    return company
+
+
+def set_company_status(session, company: Company, *, status: str) -> Company:
+    """Suspend or reinstate a company (T-7.ADMIN.03).
+
+    Suspension is refused for a company that does not exist and refused *by name* for a
+    status that is not one of :data:`COMPANY_STATUSES`, so a typo cannot quietly leave a
+    company in a state nothing reads.
+    """
+    wanted = str(status).strip().lower()
+    if wanted not in COMPANY_STATUSES:
+        raise UnknownCompanyStatus(
+            f"{status!r} is not a company status; state one of"
+            f" {', '.join(COMPANY_STATUSES)}"
+        )
+    company.status = wanted
     session.flush()
     return company

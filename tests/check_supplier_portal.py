@@ -44,6 +44,8 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from tests.identity import sign_in  # noqa: E402
+
 
 from app.api import BASE, app  # noqa: E402
 from app.company import Company  # noqa: E402
@@ -391,10 +393,10 @@ def main() -> int:
         session.commit()
 
         client = TestClient(app, raise_server_exceptions=False)
-        acme_headers = {"X-Company-Id": str(COMPANY), "X-Actor": "acme.portal"}
-        boreal_headers = {"X-Company-Id": str(COMPANY), "X-Actor": "boreal.portal"}
-        stray_headers = {"X-Company-Id": str(COMPANY), "X-Actor": "stray.portal"}
-        homeless_headers = {"X-Company-Id": str(COMPANY), "X-Actor": "homeless.portal"}
+        acme_headers = sign_in(engine, company_id=COMPANY, actor="acme.portal")
+        boreal_headers = sign_in(engine, company_id=COMPANY, actor="boreal.portal")
+        stray_headers = sign_in(engine, company_id=COMPANY, actor="stray.portal")
+        homeless_headers = sign_in(engine, company_id=COMPANY, actor="homeless.portal")
 
         mine = client.get(f"{BASE}/portal/documents", headers=acme_headers)
         assert mine.status_code == 200, mine.text

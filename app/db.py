@@ -10,9 +10,12 @@ build an unscoped schema. It has two halves:
 
 * **Every table carries the company dimension.** A table is company-scoped when
   it has a ``company_id`` column. A table without one is allowed only if it is
-  declared in ``GLOBAL_TABLES`` (no company owns its rows) or in ``CHILD_TABLES``
-  (isolated through its parent). Anything else fails the build, so a new table
-  cannot be added without a deliberate decision about which company owns it.
+  declared in ``GLOBAL_TABLES`` (no company owns its rows, but a company can file
+  its trail row — the company master is the case that name exists for), in
+  ``CHILD_TABLES`` (isolated through its parent), or in ``UNSCOPED_TABLES``
+  (installation-level, with neither a dimension nor a trail — identity, added with
+  T-7.AUTH.01). Anything else fails the build, so a new table cannot be added
+  without a deliberate decision about which company owns it.
 * **Isolation is the database's job, not each caller's memory.** Creating the
   schema turns on row-level security on every company-scoped table, with a policy
   comparing the row's ``company_id`` with the company the session is bound to
@@ -56,6 +59,32 @@ CHILD_TABLES = {
     "field_permission": ("role", "role_id", "id"),
     # T-1.INV.06: a count's lines belong to the count, which carries the dimension.
     "physical_count_line": ("physical_count", "count_id", "id"),
+    # T-8.DELIVERY.01: an outbound attempt's rows belong to the delivery that carries it.
+    "delivery_attempt": ("outbound_delivery", "delivery_id", "id"),
+}
+
+# Installation-level tables: no company dimension **and** no trail row of their own
+# (T-7.AUTH.01). Identity is read *before* a company is known — the session is what
+# names the company — so a session cannot be scoped by one, and a row of these tables
+# is not owned by a company, it *points at* one (hence `active_company_id`,
+# `member_company_id`: in this schema `company_id` means "owned by that company", and
+# using it here would say something untrue about the row).
+#
+# The cost is stated where it is paid: the audit trail files every row under a
+# company, so these tables have no trail. `tests/check_audit_coverage.py` holds this
+# same list as its exclusions, so a table cannot be dropped in here without a reason,
+# and what covers the ground instead is recorded in `app/identity.py`'s docstring.
+UNSCOPED_TABLES = {
+    "app_user": "a person may act in several companies, so no one company owns the row",
+    "user_session": "read before the company it names is known, so it cannot be scoped by it",
+    "user_membership": "says which companies a person may act in, for all of them at once",
+    "user_totp": "belongs to the person, not to a company",
+    "user_recovery_code": "belongs to the person, not to a company",
+    # T-8.WORK.01: a scheduled job belongs to the platform, not to a company, and the worker
+    # that runs it holds no company session — a scoped row would be invisible to the very
+    # process that has to report it. The job's *effect* is company-scoped like everything
+    # else; the record that it ran is not.
+    "job_run": "a run record is the platform's: the unscoped worker has to read and write it",
 }
 
 
@@ -99,7 +128,7 @@ def company_scoping_ddl(metadata: MetaData, connection) -> None:
     """
     predicates = {}
     for table in metadata.tables.values():
-        if table.name in GLOBAL_TABLES:
+        if table.name in GLOBAL_TABLES or table.name in UNSCOPED_TABLES:
             continue
         predicate = _policy_predicate(table)
         if predicate is None:
@@ -127,12 +156,14 @@ def company_scoping_ddl(metadata: MetaData, connection) -> None:
 
 @event.listens_for(Base.metadata, "after_create")
 def _scope_created_schema(metadata: MetaData, connection, **_kw) -> None:
-    """Apply the company scoping whenever the schema is created."""
-    # ponytail: the guard rides on `create_all`, which is how every schema in this
-    # repository is built today. Ceiling: a table added later by a migration tool
-    # would not pass through here. Upgrade path: when migrations arrive
-    # (T-0.CICD.01 / T-0.DEPLOY.01 own the pipeline), call `company_scoping_ddl`
-    # from the migration too.
+    """Apply the company scoping whenever the schema is created.
+
+    T-8.MIG.01 discharged the ceiling this hook used to carry ("a table added later by a
+    migration tool would not pass through here"): `migrations/env.py` replays this
+    metadata's own ``after_create`` listeners against a migrated schema, so both paths
+    install the same policies. ``tests/check_migrations.py`` compares them table by table,
+    which is what keeps the two entry points from drifting apart.
+    """
     company_scoping_ddl(metadata, connection)
 
 

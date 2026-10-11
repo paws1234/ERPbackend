@@ -42,7 +42,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import Mapped, Session, mapped_column, relationship
 
-from app.audit import append_only
+from app.audit import append_only, reinstallable
 from app.company import company_base_currency
 from app.db import Base
 from app.ledger.accounts import account_by_code
@@ -202,22 +202,26 @@ $$;
 """
 )
 
-_ENTRY_TRIGGER = DDL(
+_ENTRY_TRIGGER = reinstallable(
+    "journal_entry_must_have_lines",
+    "journal_entry",
     """
 CREATE CONSTRAINT TRIGGER journal_entry_must_have_lines
     AFTER INSERT ON journal_entry
     DEFERRABLE INITIALLY DEFERRED
     FOR EACH ROW EXECUTE FUNCTION journal_entry_balances();
-"""
+""",
 )
 
-_LINE_TRIGGER = DDL(
+_LINE_TRIGGER = reinstallable(
+    "journal_line_must_balance",
+    "journal_line",
     """
 CREATE CONSTRAINT TRIGGER journal_line_must_balance
     AFTER INSERT OR UPDATE OR DELETE ON journal_line
     DEFERRABLE INITIALLY DEFERRED
     FOR EACH ROW EXECUTE FUNCTION journal_entry_balances();
-"""
+""",
 )
 
 for _ddl in (_BALANCE_FUNCTION, _ENTRY_TRIGGER, _LINE_TRIGGER):

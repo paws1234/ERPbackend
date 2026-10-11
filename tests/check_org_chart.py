@@ -34,6 +34,8 @@ from sqlalchemy.exc import DBAPIError
 from sqlalchemy.orm import Session
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from tests.identity import sign_in  # noqa: E402
+
 
 from app.api import BASE, app  # noqa: E402
 from app.audit import soft_delete  # noqa: E402
@@ -357,7 +359,7 @@ def main() -> int:
         session.commit()
 
     client = TestClient(app, raise_server_exceptions=False)
-    headers = {"X-Company-Id": str(company_id), "X-Actor": "olive"}
+    headers = sign_in(engine, company_id=company_id, actor="olive")
     chart_url = f"{BASE}/org-chart"
 
     # Without the capability the boundary refuses before any data is read, in the one shape.

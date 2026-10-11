@@ -217,6 +217,8 @@ def send_outbound(
     destination: str,
     payload: dict,
     max_attempts: int = DEFAULT_ATTEMPTS,
+    delivery: OutboundDelivery | None = None,
+    on_attempt: Callable[[int, str, str | None], Any] | None = None,
 ) -> OutboundDelivery:
     """Deliver one message, retrying a failure and logging every attempt.
 
@@ -224,27 +226,44 @@ def send_outbound(
     a send that failed — or that died mid-flight — is visible in the delivery log
     rather than lost with the caller's transaction. The channel's credentials are
     not part of the row.
+
+    Two optional arguments let the phase that owns a channel's *retry policy* keep
+    it there without leaving this boundary (T-8.DELIVERY.01):
+
+    * ``delivery`` — an existing log row to continue rather than a new one, so a
+      retry appends to the delivery it is retrying instead of creating a second
+      message. Numbering continues from the row's own attempt count.
+    * ``on_attempt`` — called after every attempt with ``(delivery, attempt, status, error)``,
+      so a consumer that needs a row per attempt can write one from inside the boundary.
+      Never called before the log row exists; the boundary's own rule ("a send that failed
+      is visible") is what makes the row exist first.
     """
     transport = _transports.get(channel)
     if transport is None:
         raise UnconfiguredChannel(f"no transport is registered for {channel!r}")
 
-    delivery = OutboundDelivery(
-        company_id=company_id,
-        channel=channel,
-        destination=str(destination),
-        payload=payload,
-        status=SENDING,
-        attempts=0,
-    )
-    session.add(delivery)
+    if delivery is None:
+        delivery = OutboundDelivery(
+            company_id=company_id,
+            channel=channel,
+            destination=str(destination),
+            payload=payload,
+            status=SENDING,
+            attempts=0,
+        )
+        session.add(delivery)
+    else:
+        delivery.status = SENDING
+        delivery.destination = str(destination)
+        delivery.payload = payload
     session.commit()
     # The company binding is transaction-scoped (app.db), and this function
     # commits: state it again so the attempts and the outcome land on the row.
     scope_to_company(session, company_id)
 
+    start = delivery.attempts
     for attempt in range(1, max_attempts + 1):
-        delivery.attempts = attempt
+        delivery.attempts = start + attempt
         try:
             transport(destination, payload)
         except Exception as exc:  # a boundary: whatever the transport raised
@@ -255,6 +274,8 @@ def send_outbound(
             delivery.status = SENT
         session.commit()
         scope_to_company(session, company_id)
+        if on_attempt is not None:
+            on_attempt(delivery, delivery.attempts, delivery.status, delivery.last_error)
         if delivery.status == SENT:
             return delivery
 

@@ -5,3 +5,13 @@ fastapi
 uvicorn
 sqlalchemy>=2
 psycopg[binary]
+# T-7.AUTH.01 — the password hash. Argon2id is the decided algorithm (plan §8), and
+# `argon2-cffi` is the reference implementation of it.
+argon2-cffi
+# T-8.MIG.01 — the schema evolves by migration from Phase 8 on. Alembic is the
+# migration tool; `alembic check` is what fails a model that arrived without one.
+alembic
+# T-8.WORK.01 — Postgres-backed background work, no Redis (plan §9: `queue_library`
+# is pinned to `pgqueuer`). It uses the psycopg already here, so the queue adds one
+# dependency and no driver.
+pgqueuer

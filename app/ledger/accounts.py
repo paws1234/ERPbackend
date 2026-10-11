@@ -40,7 +40,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import Mapped, Session, mapped_column, relationship
 
-from app.audit import SoftDeleteMixin, deny_hard_delete, soft_delete
+from app.audit import SoftDeleteMixin, deny_hard_delete, reinstallable, soft_delete
 from app.db import Base
 
 # The five account classes §2.1 names, in the order a statement reads them.
@@ -172,13 +172,15 @@ $$;
 """
 )
 
-_TREE_TRIGGER = DDL(
+_TREE_TRIGGER = reinstallable(
+    "account_tree_rules",
+    "account",
     """
 CREATE CONSTRAINT TRIGGER account_tree_rules
     AFTER INSERT OR UPDATE ON account
     DEFERRABLE INITIALLY DEFERRED
     FOR EACH ROW EXECUTE FUNCTION account_tree_rules();
-"""
+""",
 )
 
 for _ddl in (_TREE_FUNCTION, _TREE_TRIGGER):

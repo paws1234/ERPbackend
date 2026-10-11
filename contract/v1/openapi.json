@@ -3904,6 +3904,68 @@
         "title": "QuotationRepriceIn",
         "type": "object"
       },
+      "ReadinessCheckOut": {
+        "description": "One dependency, its state, and a reason safe to publish (T-8.OBS.01).",
+        "properties": {
+          "detail": {
+            "title": "Detail",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "ok": {
+            "title": "Ok",
+            "type": "boolean"
+          },
+          "revision": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Revision"
+          }
+        },
+        "required": [
+          "name",
+          "ok",
+          "detail"
+        ],
+        "title": "ReadinessCheckOut",
+        "type": "object"
+      },
+      "ReadinessOut": {
+        "description": "What `/api/v1/ready` answers: whether this instance can serve, and each check.",
+        "properties": {
+          "checks": {
+            "items": {
+              "$ref": "#/components/schemas/ReadinessCheckOut"
+            },
+            "title": "Checks",
+            "type": "array"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "version": {
+            "title": "Version",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status",
+          "version",
+          "checks"
+        ],
+        "title": "ReadinessOut",
+        "type": "object"
+      },
       "ReportIn": {
         "properties": {
           "capability": {
@@ -8429,7 +8491,7 @@
     },
     "/api/v1/health": {
       "get": {
-        "description": "Liveness, and the contract version this instance publishes.",
+        "description": "Liveness: the process is up and serving \u2014 nothing about its dependencies.\n\nA liveness probe must not fail for a reason a restart cannot fix, so this touches no\ndatabase and answers as long as the process runs. Readiness is the other half of\nT-8.OBS.01's split (`/api/v1/ready`), and it is the one a load balancer should ask\nbefore sending traffic.",
         "operationId": "health_api_v1_health_get",
         "responses": {
           "200": {
@@ -8776,6 +8838,98 @@
         "summary": "Post Entry",
         "tags": [
           "ledger"
+        ]
+      }
+    },
+    "/api/v1/metrics": {
+      "get": {
+        "description": "The counters this process reports, in Prometheus' text exposition format.\n\n`metrics_enabled=false` answers `404` rather than serving an empty document: a scrape\nthat is switched off should look switched off, and a `404` is what an operator's scrape\nconfig will report as a failure to collect. The registry is this process's own\n(`app/observability.py` states the ceiling): no cross-process aggregation, so a scrape\nreads the web container's numbers and the worker's separately.",
+        "operationId": "metrics_api_v1_metrics_get",
+        "responses": {
+          "200": {
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Prometheus text format"
+          },
+          "400": {
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The request could not be understood"
+          },
+          "401": {
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The caller is not identified"
+          },
+          "403": {
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The caller may not do this"
+          },
+          "404": {
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The company, document or route does not exist"
+          },
+          "409": {
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The request clashes with one already made"
+          },
+          "422": {
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The request did not match the contract, or a domain rule refused it"
+          },
+          "500": {
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The platform failed unexpectedly"
+          }
+        },
+        "summary": "Metrics",
+        "tags": [
+          "platform"
         ]
       }
     },
@@ -12286,6 +12440,108 @@
         "summary": "Reprice",
         "tags": [
           "sales"
+        ]
+      }
+    },
+    "/api/v1/ready": {
+      "get": {
+        "description": "Readiness: the database answers and the schema is at the revision this build expects.\n\nAnswers `503` (not `500`) when it is not ready, because \"not ready yet\" is a state a\ndeployment moves out of, and a load balancer needs the distinction. The body names what\nis not ready and never why \u2014 the exception is in the log, and this route is public\n(T-8.OBS.01, `SECURITY-REVIEW.md`'s access matrix).",
+        "operationId": "ready_api_v1_ready_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReadinessOut"
+                }
+              }
+            },
+            "description": "the instance can serve"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The request could not be understood"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The caller is not identified"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The caller may not do this"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The company, document or route does not exist"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The request clashes with one already made"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The request did not match the contract, or a domain rule refused it"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The platform failed unexpectedly"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReadinessOut"
+                }
+              }
+            },
+            "description": "the instance cannot serve yet"
+          }
+        },
+        "summary": "Ready",
+        "tags": [
+          "platform"
         ]
       }
     },

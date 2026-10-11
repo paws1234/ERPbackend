@@ -34,8 +34,9 @@ fails (non-zero exit) if any of these stops holding:
    nameless update
 6. **the trail cannot be altered through the application's interfaces** — no module of the
    platform writes it but the trail's own two writers (checked by reading every source file),
-   an UPDATE and a DELETE against it are refused by the database, and the refusal is reported
-   to the caller in the platform's one error shape rather than swallowed
+   an UPDATE and a DELETE against it are refused by the database, and the refusal reaches the
+   caller in the platform's one error shape **without its reason**: the database's own words go
+   to the log, not the body, which is what `T-8.OBS.01` changed and what this claim drives
 7. **the coverage matrix is printed** — table → the module that owns it → audited or the
    reason it is not, ordered by the module that owns it, so the shape of the coverage is
    readable rather than counted
@@ -46,6 +47,7 @@ fails (non-zero exit) if any of these stops holding:
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 import re
 import sys
@@ -94,6 +96,13 @@ EXCLUDED = {
     "audit_log": "the trail itself: a row describing a write to the trail would recurse",
     "journal_line": (
         "written only with its append-only parent, whose own row names the change"
+    ),
+    # T-8.DEL.01 — outbound delivery. A child of the delivery it belongs to (`app/db.py`'s
+    # CHILD_TABLES): it carries no company of its own, the parent's trail row names every
+    # change to it, and the attempts are the detail underneath that row
+    # (`app/delivery.py`'s `DeliveryAttempt` states the same reasoning where it is declared).
+    "delivery_attempt": (
+        "written only with its delivery, which owns the company the trail files under"
     ),
     "approval_decision": (
         "appended, never changed (append_only), and it carries its own actor and instant"
@@ -435,9 +444,30 @@ def main() -> int:
             refusal = exc
             session.rollback()
         assert refusal is not None, "the trail accepted an UPDATE"
-        reported = asyncio.run(_unexpected(None, refusal)).body.decode()
+        logged: list[logging.LogRecord] = []
+
+        class _Capture(logging.Handler):
+            def emit(self, record: logging.LogRecord) -> None:
+                logged.append(record)
+
+        handler = _Capture()
+        platform_log = logging.getLogger("erp")
+        platform_log.addHandler(handler)
+        try:
+            reported = asyncio.run(_unexpected(None, refusal)).body.decode()
+        finally:
+            platform_log.removeHandler(handler)
         assert "append-only" in str(refusal), refusal
-        assert "is append-only" in reported and "internal_error" in reported, reported
+        # T-8.OBS.01, finding 2 of the 2026-10-10 audit: the body used to carry
+        # f"{type(exc).__name__}: {exc}" — the database's own words, which name the table and
+        # the trigger — handed to whoever asked. The caller gets the one error shape now, and
+        # the reason goes to the log beside the traceback.
+        assert "internal_error" in reported, reported
+        assert "append-only" not in reported, reported
+        written = "\n".join(logging.Formatter().format(record) for record in logged)
+        assert "append-only" in written, (
+            f"the refusal was neither answered nor logged: {written!r}"
+        )
         deleted = None
         try:
             session.connection().exec_driver_sql("DELETE FROM audit_log WHERE entity = 'party'")
@@ -454,7 +484,7 @@ def main() -> int:
         f" refusal — read out of {len(list(ROOT.glob('app/**/*.py')))} source files; an UPDATE"
         f" and a DELETE against it are refused"
         f" ('{str(refusal).splitlines()[0][:44]}…') and the refusal reaches the caller in the"
-        " platform's one error shape"
+        " platform's one error shape without the reason, which is in the log"
     )
 
     # 7 — the matrix, printed

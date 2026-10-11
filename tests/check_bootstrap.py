@@ -15,7 +15,9 @@ stops holding:
 2. **the schema is the whole schema.** Every module under `app/` that declares a table is
    imported by the installer (its own scan compared with this file's), and every table those
    modules declare exists in the database the installer left. A module nobody imports is a table
-   nobody creates, and the run has to happen in a process that did not import them for it.
+   nobody creates, and the run has to happen in a process that did not import them for it. The
+   tables the install owns without a model — the migration stamp and the queue's own — are named
+   with their reason (:data:`NOT_FROM_MODELS`), so a sixth one is red rather than absorbed.
 3. **the tables the API writes are among them** — driven, not listed: a posting taken through
    the app, with an idempotency key, is answered `201` and replayed, so the key table is written
    rather than merely present. The seed that prompted this check built a *partial* schema and
@@ -72,6 +74,19 @@ ADMIN = "installer@example.com"
 
 # What the command prints when it installs a company; the id in it is what a client states.
 INSTALLED = re.compile(r"^company ([0-9a-f-]{36}) installed for", re.MULTILINE)
+
+# The tables the install leaves that **no model declares**, each with the reason. From Phase 8
+# the schema is Alembic's (`migrations/`), so an install that ran the migrations carries their
+# stamp, and `pgqueuer` installs its own tables from the library's DDL (`migrations/env.py`
+# excludes them from autogenerate for the same reason). Named rather than ignored: a table the
+# install writes and no model declares is otherwise a part of the schema nobody owns.
+NOT_FROM_MODELS = {
+    "alembic_version": "Alembic's own stamp: the migration the database is at",
+    "pgqueuer": "the queue's table, installed by pgqueuer's own DDL",
+    "pgqueuer_log": "the queue's log, installed by pgqueuer's own DDL",
+    "pgqueuer_schedules": "the queue's schedule table, installed by pgqueuer's own DDL",
+    "pgqueuer_statistics": "the queue's counters, installed by pgqueuer's own DDL",
+}
 
 REVIEW = ROOT / "SECURITY-REVIEW.md"
 TABLE_MARKER = re.compile(r"^[ \t]*__tablename__[ \t]*=", re.MULTILINE)
@@ -184,12 +199,14 @@ def main() -> int:
         f"the install left {len(absent)} table(s) the models declare out of the database:"
         f" {absent}"
     )
-    assert not tables - complete, (
-        f"the install created tables no model declares: {sorted(tables - complete)}"
+    unexplained = sorted(tables - complete - set(NOT_FROM_MODELS))
+    assert not unexplained, (
+        f"the install created tables no model declares: {unexplained}"
     )
     print(
         f"the install created all {len(tables)} tables that the {len(declared)} model modules"
-        " declare"
+        f" declare, plus the {len(NOT_FROM_MODELS)} it owns without a model"
+        f" ({', '.join(sorted(NOT_FROM_MODELS))})"
     )
 
     # The id the command printed is the id a client states, and it names the installed company.

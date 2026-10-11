@@ -111,6 +111,15 @@ DAY = "2026-09-17"
 # sweep's blind spot rather than a place to hide a route.
 PUBLIC = {
     "/api/v1/health": "a liveness probe: it answers whether the process is up, nothing else",
+    "/api/v1/ready": (
+        "a readiness probe, asked by the load balancer before it sends traffic (T-8.OBS.01):"
+        " it names what is not ready and never why, and the reason is in the log"
+    ),
+    "/api/v1/metrics": (
+        "the counters the host's scraper reads (T-8.OBS.01): route templates, status classes"
+        " and volumes — nothing a caller sent — and the review records what an open scrape"
+        " exposes as an accepted risk at the edge"
+    ),
     "/api/v1/auth/login": (
         "the route that mints a session (T-7.AUTH.04): there is none to check when it is"
         " called, and every refusal it makes is the same uninformative answer, so it cannot be"

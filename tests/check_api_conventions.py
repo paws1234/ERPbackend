@@ -35,6 +35,8 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from tests.identity import sign_in  # noqa: E402
+
 
 from app.api import API_VERSION, BASE, app  # noqa: E402
 from app.company import Company  # noqa: E402
@@ -125,7 +127,7 @@ def main() -> int:
         session.commit()
 
     client = TestClient(app, raise_server_exceptions=False)
-    headers = {"X-Company-Id": str(company_id), "X-Actor": "alice"}
+    headers = sign_in(engine, company_id=company_id, actor="alice")
 
     # 1 — the contract is generated, served, and matches what is published
     health = client.get(f"{BASE}/health")
@@ -157,7 +159,9 @@ def main() -> int:
         "invalid_request": client.post(
             f"{BASE}/journal-entries", headers={**headers, "Idempotency-Key": "invalid"}, json={}
         ),
-        "invalid_company": client.get(f"{BASE}/companies/current", headers={"X-Company-Id": "nope"}),
+        "unauthenticated": client.get(
+            f"{BASE}/companies/current", headers={"Cookie": "erpv1_session=nope"}
+        ),
         "not_found": client.get(f"{BASE}/no-such-endpoint", headers=headers),
     }
     for expected, response in cases.items():

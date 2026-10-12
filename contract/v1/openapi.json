@@ -157,6 +157,24 @@
         "title": "AccountTreeNode",
         "type": "object"
       },
+      "AssignmentIn": {
+        "properties": {
+          "role": {
+            "title": "Role",
+            "type": "string"
+          },
+          "subject": {
+            "title": "Subject",
+            "type": "string"
+          }
+        },
+        "required": [
+          "subject",
+          "role"
+        ],
+        "title": "AssignmentIn",
+        "type": "object"
+      },
       "CashDrawerPolicyIn": {
         "description": "Whether this company's tills must trade inside an open shift (null = not stated).",
         "properties": {
@@ -279,6 +297,52 @@
         "title": "CoaImportOut",
         "type": "object"
       },
+      "CompanyIn": {
+        "description": "A tenant, as it is created. The market decides what it starts with.",
+        "properties": {
+          "base_currency": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Base Currency"
+          },
+          "code": {
+            "title": "Code",
+            "type": "string"
+          },
+          "fiscal_year_start_month": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fiscal Year Start Month"
+          },
+          "market": {
+            "title": "Market",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "name",
+          "market"
+        ],
+        "title": "CompanyIn",
+        "type": "object"
+      },
       "CompanyOut": {
         "properties": {
           "base_currency": {
@@ -322,6 +386,10 @@
           "name": {
             "title": "Name",
             "type": "string"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
           }
         },
         "required": [
@@ -329,9 +397,36 @@
           "code",
           "name",
           "base_currency",
-          "fiscal_year_start_month"
+          "fiscal_year_start_month",
+          "status"
         ],
         "title": "CompanyOut",
+        "type": "object"
+      },
+      "CompanyStatusIn": {
+        "properties": {
+          "status": {
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status"
+        ],
+        "title": "CompanyStatusIn",
+        "type": "object"
+      },
+      "CompanySwitchIn": {
+        "properties": {
+          "company": {
+            "title": "Company",
+            "type": "string"
+          }
+        },
+        "required": [
+          "company"
+        ],
+        "title": "CompanySwitchIn",
         "type": "object"
       },
       "ConfirmOrderIn": {
@@ -1052,6 +1147,22 @@
         "title": "FxRateOut",
         "type": "object"
       },
+      "GrantIn": {
+        "properties": {
+          "capabilities": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Capabilities",
+            "type": "array"
+          }
+        },
+        "required": [
+          "capabilities"
+        ],
+        "title": "GrantIn",
+        "type": "object"
+      },
       "HealthOut": {
         "properties": {
           "status": {
@@ -1298,6 +1409,52 @@
           "base_credit"
         ],
         "title": "JournalLineOut",
+        "type": "object"
+      },
+      "MfaCodeIn": {
+        "properties": {
+          "code": {
+            "title": "Code",
+            "type": "string"
+          }
+        },
+        "required": [
+          "code"
+        ],
+        "title": "MfaCodeIn",
+        "type": "object"
+      },
+      "MfaEnrolmentOut": {
+        "description": "The secret, its otpauth URL, and the recovery codes \u2014 shown once, never again.",
+        "properties": {
+          "otpauth_url": {
+            "title": "Otpauth Url",
+            "type": "string"
+          },
+          "recovery_codes": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Recovery Codes"
+          },
+          "secret": {
+            "title": "Secret",
+            "type": "string"
+          }
+        },
+        "required": [
+          "secret",
+          "otpauth_url"
+        ],
+        "title": "MfaEnrolmentOut",
         "type": "object"
       },
       "OpportunityIn": {
@@ -1780,6 +1937,48 @@
           "total"
         ],
         "title": "PageOut",
+        "type": "object"
+      },
+      "PasswordChangeIn": {
+        "properties": {
+          "current_password": {
+            "title": "Current Password",
+            "type": "string"
+          },
+          "new_password": {
+            "title": "New Password",
+            "type": "string"
+          }
+        },
+        "required": [
+          "current_password",
+          "new_password"
+        ],
+        "title": "PasswordChangeIn",
+        "type": "object"
+      },
+      "PasswordSetIn": {
+        "properties": {
+          "must_change": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Must Change"
+          },
+          "password": {
+            "title": "Password",
+            "type": "string"
+          }
+        },
+        "required": [
+          "password"
+        ],
+        "title": "PasswordSetIn",
         "type": "object"
       },
       "PickListIn": {
@@ -3705,6 +3904,68 @@
         "title": "QuotationRepriceIn",
         "type": "object"
       },
+      "ReadinessCheckOut": {
+        "description": "One dependency, its state, and a reason safe to publish (T-8.OBS.01).",
+        "properties": {
+          "detail": {
+            "title": "Detail",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "ok": {
+            "title": "Ok",
+            "type": "boolean"
+          },
+          "revision": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Revision"
+          }
+        },
+        "required": [
+          "name",
+          "ok",
+          "detail"
+        ],
+        "title": "ReadinessCheckOut",
+        "type": "object"
+      },
+      "ReadinessOut": {
+        "description": "What `/api/v1/ready` answers: whether this instance can serve, and each check.",
+        "properties": {
+          "checks": {
+            "items": {
+              "$ref": "#/components/schemas/ReadinessCheckOut"
+            },
+            "title": "Checks",
+            "type": "array"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "version": {
+            "title": "Version",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status",
+          "version",
+          "checks"
+        ],
+        "title": "ReadinessOut",
+        "type": "object"
+      },
       "ReportIn": {
         "properties": {
           "capability": {
@@ -3878,6 +4139,47 @@
           "status"
         ],
         "title": "ReportRunOut",
+        "type": "object"
+      },
+      "RestrictionIn": {
+        "description": "One field of one entity, for one role. Both flags are optional and nullable:\nnull means \"not stated\", and the two are independent \u2014 a field may be writable and\nunreadable, which is what a write-only column (a password, a bank account) is.",
+        "properties": {
+          "can_read": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Can Read"
+          },
+          "can_write": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Can Write"
+          },
+          "entity": {
+            "title": "Entity",
+            "type": "string"
+          },
+          "field": {
+            "title": "Field",
+            "type": "string"
+          }
+        },
+        "required": [
+          "entity",
+          "field"
+        ],
+        "title": "RestrictionIn",
         "type": "object"
       },
       "RfqBasisOut": {
@@ -4258,6 +4560,148 @@
         "title": "RfqSupplierOut",
         "type": "object"
       },
+      "RoleIn": {
+        "properties": {
+          "code": {
+            "title": "Code",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "name"
+        ],
+        "title": "RoleIn",
+        "type": "object"
+      },
+      "RoleOut": {
+        "properties": {
+          "capabilities": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Capabilities",
+            "type": "array"
+          },
+          "code": {
+            "title": "Code",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "name",
+          "capabilities"
+        ],
+        "title": "RoleOut",
+        "type": "object"
+      },
+      "RolePageOut": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/RoleOut"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "limit": {
+            "title": "Limit",
+            "type": "integer"
+          },
+          "offset": {
+            "title": "Offset",
+            "type": "integer"
+          },
+          "total": {
+            "title": "Total",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "items",
+          "limit",
+          "offset",
+          "total"
+        ],
+        "title": "RolePageOut",
+        "type": "object"
+      },
+      "SessionOut": {
+        "description": "Who the caller is and what the shell may show them.\n\nDeliberately carries no company *id* the caller could reuse: the session is the\nonly thing that names the company (T-7.AUTH.02), so a shell that wants to say\n\"Acme Trading\" reads the code, and one that wants another company switches.",
+        "properties": {
+          "capabilities": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Capabilities",
+            "type": "array"
+          },
+          "companies": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Companies",
+            "type": "array"
+          },
+          "company": {
+            "title": "Company",
+            "type": "string"
+          },
+          "display_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Display Name"
+          },
+          "email": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Email"
+          },
+          "login": {
+            "title": "Login",
+            "type": "string"
+          },
+          "mfa_pending": {
+            "title": "Mfa Pending",
+            "type": "boolean"
+          },
+          "must_change_password": {
+            "title": "Must Change Password",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "login",
+          "company",
+          "companies",
+          "capabilities",
+          "must_change_password",
+          "mfa_pending"
+        ],
+        "title": "SessionOut",
+        "type": "object"
+      },
       "ShipmentIn": {
         "description": "What a shipment needs: where from, and how much of which lines.\n\nThe lines come with the header because a shipment with nothing on it moves no\nstock \u2014 the boundary refuses an empty list rather than storing a document that\ndescribes nothing.",
         "properties": {
@@ -4383,6 +4827,194 @@
         "title": "ShipmentOut",
         "type": "object"
       },
+      "SignInIn": {
+        "description": "What a person types. `company` is only needed when they work in several.",
+        "properties": {
+          "company": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Company"
+          },
+          "login": {
+            "title": "Login",
+            "type": "string"
+          },
+          "password": {
+            "title": "Password",
+            "type": "string"
+          }
+        },
+        "required": [
+          "login",
+          "password"
+        ],
+        "title": "SignInIn",
+        "type": "object"
+      },
+      "UserIn": {
+        "properties": {
+          "display_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Display Name"
+          },
+          "email": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Email"
+          },
+          "login": {
+            "title": "Login",
+            "type": "string"
+          },
+          "password": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Password"
+          }
+        },
+        "required": [
+          "login"
+        ],
+        "title": "UserIn",
+        "type": "object"
+      },
+      "UserOut": {
+        "properties": {
+          "companies": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Companies",
+            "type": "array"
+          },
+          "display_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Display Name"
+          },
+          "email": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Email"
+          },
+          "has_password": {
+            "title": "Has Password",
+            "type": "boolean"
+          },
+          "login": {
+            "title": "Login",
+            "type": "string"
+          },
+          "mfa_enrolled": {
+            "title": "Mfa Enrolled",
+            "type": "boolean"
+          },
+          "roles": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Roles",
+            "type": "array"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "login",
+          "email",
+          "display_name",
+          "status",
+          "has_password",
+          "companies",
+          "roles",
+          "mfa_enrolled"
+        ],
+        "title": "UserOut",
+        "type": "object"
+      },
+      "UserPageOut": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/UserOut"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "limit": {
+            "title": "Limit",
+            "type": "integer"
+          },
+          "offset": {
+            "title": "Offset",
+            "type": "integer"
+          },
+          "total": {
+            "title": "Total",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "items",
+          "limit",
+          "offset",
+          "total"
+        ],
+        "title": "UserPageOut",
+        "type": "object"
+      },
+      "UserStatusIn": {
+        "properties": {
+          "status": {
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status"
+        ],
+        "title": "UserStatusIn",
+        "type": "object"
+      },
       "WithheldRecipientOut": {
         "description": "A recipient the run did not deliver to, and why \u2014 a subject without the capability.",
         "properties": {
@@ -4415,27 +5047,6 @@
       "get": {
         "description": "Every key this company has mapped \u2014 what a settings screen reads.",
         "operationId": "list_account_mappings_api_v1_account_mappings_get",
-        "parameters": [
-          {
-            "in": "header",
-            "name": "x-company-id",
-            "required": true,
-            "schema": {
-              "title": "X-Company-Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-actor",
-            "required": false,
-            "schema": {
-              "default": "unknown",
-              "title": "X-Actor",
-              "type": "string"
-            }
-          }
-        ],
         "responses": {
           "200": {
             "content": {
@@ -4539,25 +5150,6 @@
             "required": true,
             "schema": {
               "title": "Key",
-              "type": "string"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-company-id",
-            "required": true,
-            "schema": {
-              "title": "X-Company-Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-actor",
-            "required": false,
-            "schema": {
-              "default": "unknown",
-              "title": "X-Actor",
               "type": "string"
             }
           }
@@ -4664,27 +5256,6 @@
       "post": {
         "description": "Create one account in the company's chart of accounts.",
         "operationId": "new_account_api_v1_accounts_post",
-        "parameters": [
-          {
-            "in": "header",
-            "name": "x-company-id",
-            "required": true,
-            "schema": {
-              "title": "X-Company-Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-actor",
-            "required": false,
-            "schema": {
-              "default": "unknown",
-              "title": "X-Actor",
-              "type": "string"
-            }
-          }
-        ],
         "requestBody": {
           "content": {
             "application/json": {
@@ -4787,27 +5358,6 @@
       "post": {
         "description": "Seed the chart from a market's localization pack template (T-0.LOC.01).",
         "operationId": "import_coa_api_v1_accounts_import_coa_post",
-        "parameters": [
-          {
-            "in": "header",
-            "name": "x-company-id",
-            "required": true,
-            "schema": {
-              "title": "X-Company-Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-actor",
-            "required": false,
-            "schema": {
-              "default": "unknown",
-              "title": "X-Actor",
-              "type": "string"
-            }
-          }
-        ],
         "requestBody": {
           "content": {
             "application/json": {
@@ -4910,27 +5460,6 @@
       "get": {
         "description": "The company's whole chart, nested, parents before their children.",
         "operationId": "accounts_tree_api_v1_accounts_tree_get",
-        "parameters": [
-          {
-            "in": "header",
-            "name": "x-company-id",
-            "required": true,
-            "schema": {
-              "title": "X-Company-Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-actor",
-            "required": false,
-            "schema": {
-              "default": "unknown",
-              "title": "X-Actor",
-              "type": "string"
-            }
-          }
-        ],
         "responses": {
           "200": {
             "content": {
@@ -5023,31 +5552,1872 @@
         ]
       }
     },
-    "/api/v1/companies/current": {
+    "/api/v1/admin/assignments": {
+      "post": {
+        "description": "Give a member one of this company's roles. Takes effect on their next request.\n\nTwo refusals worth stating: the subject must be a **member** of this company, and a\nrole the `mfa_required_roles` variable names cannot be assigned to somebody without a\nconfirmed second factor \u2014 which is how \"MFA is enforced for the administrator role\"\nis true without a sign-in that could lock an install out of itself.",
+        "operationId": "assign_role_route_api_v1_admin_assignments_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AssignmentIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The request could not be understood"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The caller is not identified"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The caller may not do this"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The company, document or route does not exist"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The request clashes with one already made"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The request did not match the contract, or a domain rule refused it"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The platform failed unexpectedly"
+          }
+        },
+        "summary": "Assign Role Route",
+        "tags": [
+          "administration"
+        ]
+      }
+    },
+    "/api/v1/admin/roles": {
       "get": {
-        "description": "The company the request is bound to \u2014 what the frontend shell reads first.",
-        "operationId": "current_company_api_v1_companies_current_get",
+        "description": "This company's roles and what each holds.",
+        "operationId": "list_roles_api_v1_admin_roles_get",
         "parameters": [
           {
-            "in": "header",
-            "name": "x-company-id",
-            "required": true,
+            "in": "query",
+            "name": "limit",
+            "required": false,
             "schema": {
-              "title": "X-Company-Id",
-              "type": "string"
+              "default": 25,
+              "maximum": 200,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
             }
           },
           {
-            "in": "header",
-            "name": "x-actor",
+            "in": "query",
+            "name": "offset",
             "required": false,
             "schema": {
-              "default": "unknown",
-              "title": "X-Actor",
+              "default": 0,
+              "minimum": 0,
+              "title": "Offset",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RolePageOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The request could not be understood"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The caller is not identified"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The caller may not do this"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The company, document or route does not exist"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The request clashes with one already made"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The request did not match the contract, or a domain rule refused it"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The platform failed unexpectedly"
+          }
+        },
+        "summary": "List Roles",
+        "tags": [
+          "administration"
+        ]
+      },
+      "post": {
+        "description": "Define a role. It holds nothing until something is granted to it.",
+        "operationId": "create_role_api_v1_admin_roles_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RoleIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RoleOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The request could not be understood"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The caller is not identified"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The caller may not do this"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The company, document or route does not exist"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The request clashes with one already made"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The request did not match the contract, or a domain rule refused it"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The platform failed unexpectedly"
+          }
+        },
+        "summary": "Create Role",
+        "tags": [
+          "administration"
+        ]
+      }
+    },
+    "/api/v1/admin/roles/{code}/grants": {
+      "post": {
+        "description": "Give a role capabilities. This is the only way anything is ever allowed.",
+        "operationId": "grant_capabilities_api_v1_admin_roles__code__grants_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "code",
+            "required": true,
+            "schema": {
+              "title": "Code",
               "type": "string"
             }
           }
         ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GrantIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RoleOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The request could not be understood"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The caller is not identified"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The caller may not do this"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The company, document or route does not exist"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The request clashes with one already made"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The request did not match the contract, or a domain rule refused it"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The platform failed unexpectedly"
+          }
+        },
+        "summary": "Grant Capabilities",
+        "tags": [
+          "administration"
+        ]
+      }
+    },
+    "/api/v1/admin/roles/{code}/restrictions": {
+      "post": {
+        "description": "Restrict one field of one entity for a role \u2014 the field-level half of RBAC.",
+        "operationId": "restrict_field_api_v1_admin_roles__code__restrictions_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "code",
+            "required": true,
+            "schema": {
+              "title": "Code",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RestrictionIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RoleOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The request could not be understood"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The caller is not identified"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The caller may not do this"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The company, document or route does not exist"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The request clashes with one already made"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The request did not match the contract, or a domain rule refused it"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The platform failed unexpectedly"
+          }
+        },
+        "summary": "Restrict Field",
+        "tags": [
+          "administration"
+        ]
+      }
+    },
+    "/api/v1/admin/users": {
+      "get": {
+        "description": "The people who may work in this company. Only this company's \u2014 never others'.",
+        "operationId": "list_users_api_v1_admin_users_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 25,
+              "maximum": 200,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "minimum": 0,
+              "title": "Offset",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserPageOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The request could not be understood"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The caller is not identified"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The caller may not do this"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The company, document or route does not exist"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The request clashes with one already made"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The request did not match the contract, or a domain rule refused it"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The platform failed unexpectedly"
+          }
+        },
+        "summary": "List Users",
+        "tags": [
+          "administration"
+        ]
+      },
+      "post": {
+        "description": "Add a person to this company, with a password they can sign in with.\n\nCreating the *identity* is installation-level, but creating it through this route\nalways makes a member of the acting company: there is no way to make a user who\nbelongs nowhere, which would be an account nothing could reach or administer.",
+        "operationId": "create_user_route_api_v1_admin_users_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UserIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The request could not be understood"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The caller is not identified"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The caller may not do this"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The company, document or route does not exist"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The request clashes with one already made"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The request did not match the contract, or a domain rule refused it"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The platform failed unexpectedly"
+          }
+        },
+        "summary": "Create User Route",
+        "tags": [
+          "administration"
+        ]
+      }
+    },
+    "/api/v1/admin/users/{login}/password": {
+      "post": {
+        "description": "Set somebody's password. Their live sessions are revoked by it.",
+        "operationId": "set_user_password_api_v1_admin_users__login__password_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "login",
+            "required": true,
+            "schema": {
+              "title": "Login",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PasswordSetIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The request could not be understood"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The caller is not identified"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The caller may not do this"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The company, document or route does not exist"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The request clashes with one already made"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The request did not match the contract, or a domain rule refused it"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The platform failed unexpectedly"
+          }
+        },
+        "summary": "Set User Password",
+        "tags": [
+          "administration"
+        ]
+      }
+    },
+    "/api/v1/admin/users/{login}/status": {
+      "post": {
+        "description": "Disable or re-enable somebody. Disabling revokes every session they hold.",
+        "operationId": "set_user_status_api_v1_admin_users__login__status_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "login",
+            "required": true,
+            "schema": {
+              "title": "Login",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UserStatusIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The request could not be understood"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The caller is not identified"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The caller may not do this"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The company, document or route does not exist"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The request clashes with one already made"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The request did not match the contract, or a domain rule refused it"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The platform failed unexpectedly"
+          }
+        },
+        "summary": "Set User Status",
+        "tags": [
+          "administration"
+        ]
+      }
+    },
+    "/api/v1/auth/company": {
+      "post": {
+        "description": "Move this session to another company the person belongs to.\n\nThe membership is what permits it, never a header or a payload field: a caller\ncannot reach a company they are not a member of, which is the hole the old\n``X-Company-Id`` header left open (finding 2 of the 2026-10-10 audit).",
+        "operationId": "switch_company_api_v1_auth_company_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CompanySwitchIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The request could not be understood"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The caller is not identified"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The caller may not do this"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The company, document or route does not exist"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The request clashes with one already made"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The request did not match the contract, or a domain rule refused it"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The platform failed unexpectedly"
+          }
+        },
+        "summary": "Switch Company",
+        "tags": [
+          "identity"
+        ]
+      }
+    },
+    "/api/v1/auth/login": {
+      "post": {
+        "description": "Sign in and receive the session cookie.\n\nPublic by necessity \u2014 there is no session to check yet \u2014 and the one route that\nmints one. Every refusal is the same answer with the same wording, so a caller\ncannot enumerate logins, and the credential's failure count is written even\nthough the request is refused (app/identity.py).",
+        "operationId": "sign_in_api_v1_auth_login_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SignInIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The request could not be understood"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The caller is not identified"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The caller may not do this"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The company, document or route does not exist"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The request clashes with one already made"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The request did not match the contract, or a domain rule refused it"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The platform failed unexpectedly"
+          }
+        },
+        "summary": "Sign In",
+        "tags": [
+          "identity"
+        ]
+      }
+    },
+    "/api/v1/auth/logout": {
+      "post": {
+        "description": "Sign out: the row is revoked, so the token is dead even if the cookie is copied.",
+        "operationId": "sign_out_api_v1_auth_logout_post",
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The request could not be understood"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The caller is not identified"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The caller may not do this"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The company, document or route does not exist"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The request clashes with one already made"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The request did not match the contract, or a domain rule refused it"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The platform failed unexpectedly"
+          }
+        },
+        "summary": "Sign Out",
+        "tags": [
+          "identity"
+        ]
+      }
+    },
+    "/api/v1/auth/mfa/confirm": {
+      "post": {
+        "description": "Confirm enrolment with a live code, and receive the recovery codes once.",
+        "operationId": "confirm_second_factor_api_v1_auth_mfa_confirm_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MfaCodeIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MfaEnrolmentOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The request could not be understood"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The caller is not identified"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The caller may not do this"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The company, document or route does not exist"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The request clashes with one already made"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The request did not match the contract, or a domain rule refused it"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The platform failed unexpectedly"
+          }
+        },
+        "summary": "Confirm Second Factor",
+        "tags": [
+          "identity"
+        ]
+      }
+    },
+    "/api/v1/auth/mfa/enrol": {
+      "post": {
+        "description": "Issue a second factor. It is not demanded until a code confirms it.\n\nReachable with a session that already owes a factor, so a person can replace a lost\nauthenticator without an administrator \u2014 and reachable before one is owed, because\nholding an `mfa_required_roles` role requires having enrolled one (the assignment\nroute refuses otherwise).",
+        "operationId": "enrol_second_factor_api_v1_auth_mfa_enrol_post",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MfaEnrolmentOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The request could not be understood"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The caller is not identified"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The caller may not do this"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The company, document or route does not exist"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The request clashes with one already made"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The request did not match the contract, or a domain rule refused it"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The platform failed unexpectedly"
+          }
+        },
+        "summary": "Enrol Second Factor",
+        "tags": [
+          "identity"
+        ]
+      }
+    },
+    "/api/v1/auth/mfa/verify": {
+      "post": {
+        "description": "Finish a sign-in that owed a second factor.",
+        "operationId": "verify_second_factor_api_v1_auth_mfa_verify_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MfaCodeIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The request could not be understood"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The caller is not identified"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The caller may not do this"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The company, document or route does not exist"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The request clashes with one already made"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The request did not match the contract, or a domain rule refused it"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The platform failed unexpectedly"
+          }
+        },
+        "summary": "Verify Second Factor",
+        "tags": [
+          "identity"
+        ]
+      }
+    },
+    "/api/v1/auth/password": {
+      "post": {
+        "description": "Change your own password. The current one is required, and the rest are revoked.\n\nRevoking the other sessions is the point of a password change: if the password was\nchanged *because* somebody else had it, leaving their sessions live would leave the\nproblem in place. This session survives, so the person is not signed out of the\nscreen they just used.",
+        "operationId": "change_password_api_v1_auth_password_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PasswordChangeIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The request could not be understood"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The caller is not identified"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The caller may not do this"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The company, document or route does not exist"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The request clashes with one already made"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The request did not match the contract, or a domain rule refused it"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The platform failed unexpectedly"
+          }
+        },
+        "summary": "Change Password",
+        "tags": [
+          "identity"
+        ]
+      }
+    },
+    "/api/v1/auth/session": {
+      "get": {
+        "description": "Who this cookie is, for a shell that has one and wants to know what it may do.",
+        "operationId": "read_session_api_v1_auth_session_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The request could not be understood"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The caller is not identified"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The caller may not do this"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The company, document or route does not exist"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The request clashes with one already made"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The request did not match the contract, or a domain rule refused it"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The platform failed unexpectedly"
+          }
+        },
+        "summary": "Read Session",
+        "tags": [
+          "identity"
+        ]
+      }
+    },
+    "/api/v1/companies": {
+      "post": {
+        "description": "Provision a tenant: the company, its chart of accounts, and its first administrator.\n\nThe creator is made a member of the company they created and given its administrator\nrole, because a tenant nobody can administer is not provisioned \u2014 it is stranded.\nBoth writes are company-scoped, so the trail files them under the new company.\n\n# ponytail: no platform-level administrator. Every administration route is\n# scoped to the actor's own company, so this is how a tenant is created: by\n# somebody who already holds `company.configure` somewhere. Ceiling: an\n# operator with no company cannot create the first one \u2014 the install command is\n# still the only way in, which is the bootstrap module's job. Upgrade path: a\n# platform principal, when something asks for one.",
+        "operationId": "create_company_route_api_v1_companies_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CompanyIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CompanyOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The request could not be understood"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The caller is not identified"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The caller may not do this"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The company, document or route does not exist"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The request clashes with one already made"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The request did not match the contract, or a domain rule refused it"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The platform failed unexpectedly"
+          }
+        },
+        "summary": "Create Company Route",
+        "tags": [
+          "platform"
+        ]
+      }
+    },
+    "/api/v1/companies/current": {
+      "get": {
+        "description": "The company the request is bound to \u2014 what the frontend shell reads first.",
+        "operationId": "current_company_api_v1_companies_current_get",
         "responses": {
           "200": {
             "content": {
@@ -5140,27 +7510,6 @@
       "post": {
         "description": "State, change or withdraw this company's credit-check policy.\n\nPlan \u00a78 leaves the mode undecided, so the body carries a value or an explicit null\nrather than relying on a default: \"not stated\" is a state a company may be in, and\nthe order-time check treats it as a refusal rather than as `off`.\n\nChanging the mode is forward-looking only \u2014 decisions already recorded keep the mode\nthey were taken under, because each one stored it.",
         "operationId": "set_company_credit_check_mode_api_v1_companies_current_credit_check_mode_post",
-        "parameters": [
-          {
-            "in": "header",
-            "name": "x-company-id",
-            "required": true,
-            "schema": {
-              "title": "X-Company-Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-actor",
-            "required": false,
-            "schema": {
-              "default": "unknown",
-              "title": "X-Actor",
-              "type": "string"
-            }
-          }
-        ],
         "requestBody": {
           "content": {
             "application/json": {
@@ -5259,31 +7608,123 @@
         ]
       }
     },
-    "/api/v1/coupons": {
+    "/api/v1/companies/{code}/status": {
       "post": {
-        "description": "File one coupon.",
-        "operationId": "create_coupon_api_v1_coupons_post",
+        "description": "Suspend or reinstate a company. Nothing it owns is touched.\n\nA suspended company keeps every row \u2014 the ledger stays whole \u2014 and refuses\nsign-ins and every request except this one, which is why this route is reachable\nfor a suspended company and nothing else is (app/auth.py `allow_suspended`). It\nstill asks for `company.configure`, so lifting the suspension is as hard as\nsuspending.",
+        "operationId": "set_company_status_route_api_v1_companies__code__status_post",
         "parameters": [
           {
-            "in": "header",
-            "name": "x-company-id",
+            "in": "path",
+            "name": "code",
             "required": true,
             "schema": {
-              "title": "X-Company-Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-actor",
-            "required": false,
-            "schema": {
-              "default": "unknown",
-              "title": "X-Actor",
+              "title": "Code",
               "type": "string"
             }
           }
         ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CompanyStatusIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CompanyOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The request could not be understood"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The caller is not identified"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The caller may not do this"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The company, document or route does not exist"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The request clashes with one already made"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The request did not match the contract, or a domain rule refused it"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The platform failed unexpectedly"
+          }
+        },
+        "summary": "Set Company Status Route",
+        "tags": [
+          "platform"
+        ]
+      }
+    },
+    "/api/v1/coupons": {
+      "post": {
+        "description": "File one coupon.",
+        "operationId": "create_coupon_api_v1_coupons_post",
         "requestBody": {
           "content": {
             "application/json": {
@@ -5395,25 +7836,6 @@
               "title": "Code",
               "type": "string"
             }
-          },
-          {
-            "in": "header",
-            "name": "x-company-id",
-            "required": true,
-            "schema": {
-              "title": "X-Company-Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-actor",
-            "required": false,
-            "schema": {
-              "default": "unknown",
-              "title": "X-Actor",
-              "type": "string"
-            }
           }
         ],
         "requestBody": {
@@ -5518,27 +7940,6 @@
       "get": {
         "description": "The currencies this installation knows about.",
         "operationId": "list_currencies_api_v1_currencies_get",
-        "parameters": [
-          {
-            "in": "header",
-            "name": "x-company-id",
-            "required": true,
-            "schema": {
-              "title": "X-Company-Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-actor",
-            "required": false,
-            "schema": {
-              "default": "unknown",
-              "title": "X-Actor",
-              "type": "string"
-            }
-          }
-        ],
         "responses": {
           "200": {
             "content": {
@@ -5633,27 +8034,6 @@
       "post": {
         "description": "Register a currency in the master (T-1.ACCT.05) \u2014 global, three letters.",
         "operationId": "new_currency_api_v1_currencies_post",
-        "parameters": [
-          {
-            "in": "header",
-            "name": "x-company-id",
-            "required": true,
-            "schema": {
-              "title": "X-Company-Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-actor",
-            "required": false,
-            "schema": {
-              "default": "unknown",
-              "title": "X-Actor",
-              "type": "string"
-            }
-          }
-        ],
         "requestBody": {
           "content": {
             "application/json": {
@@ -5806,25 +8186,6 @@
               ],
               "title": "Drill Down"
             }
-          },
-          {
-            "in": "header",
-            "name": "x-company-id",
-            "required": true,
-            "schema": {
-              "title": "X-Company-Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-actor",
-            "required": false,
-            "schema": {
-              "default": "unknown",
-              "title": "X-Actor",
-              "type": "string"
-            }
           }
         ],
         "responses": {
@@ -5938,25 +8299,6 @@
               "title": "On",
               "type": "string"
             }
-          },
-          {
-            "in": "header",
-            "name": "x-company-id",
-            "required": true,
-            "schema": {
-              "title": "X-Company-Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-actor",
-            "required": false,
-            "schema": {
-              "default": "unknown",
-              "title": "X-Actor",
-              "type": "string"
-            }
           }
         ],
         "responses": {
@@ -6049,27 +8391,6 @@
       "put": {
         "description": "Store one dated rate against the company's base currency.\n\nA past date's rate cannot be rewritten (T-1.ACCT.05): the refusal is\n`currency_error` with the reason, not a silent overwrite.",
         "operationId": "put_fx_rate_api_v1_fx_rates_put",
-        "parameters": [
-          {
-            "in": "header",
-            "name": "x-company-id",
-            "required": true,
-            "schema": {
-              "title": "X-Company-Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-actor",
-            "required": false,
-            "schema": {
-              "default": "unknown",
-              "title": "X-Actor",
-              "type": "string"
-            }
-          }
-        ],
         "requestBody": {
           "content": {
             "application/json": {
@@ -6170,7 +8491,7 @@
     },
     "/api/v1/health": {
       "get": {
-        "description": "Liveness, and the contract version this instance publishes.",
+        "description": "Liveness: the process is up and serving \u2014 nothing about its dependencies.\n\nA liveness probe must not fail for a reason a restart cannot fix, so this touches no\ndatabase and answers as long as the process runs. Readiness is the other half of\nT-8.OBS.01's split (`/api/v1/ready`), and it is the one a load balancer should ask\nbefore sending traffic.",
         "operationId": "health_api_v1_health_get",
         "responses": {
           "200": {
@@ -6319,25 +8640,6 @@
               ],
               "title": "Source Id"
             }
-          },
-          {
-            "in": "header",
-            "name": "x-company-id",
-            "required": true,
-            "schema": {
-              "title": "X-Company-Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-actor",
-            "required": false,
-            "schema": {
-              "default": "unknown",
-              "title": "X-Actor",
-              "type": "string"
-            }
           }
         ],
         "responses": {
@@ -6437,25 +8739,6 @@
             "required": true,
             "schema": {
               "title": "Idempotency-Key",
-              "type": "string"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-company-id",
-            "required": true,
-            "schema": {
-              "title": "X-Company-Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-actor",
-            "required": false,
-            "schema": {
-              "default": "unknown",
-              "title": "X-Actor",
               "type": "string"
             }
           }
@@ -6558,31 +8841,102 @@
         ]
       }
     },
+    "/api/v1/metrics": {
+      "get": {
+        "description": "The counters this process reports, in Prometheus' text exposition format.\n\n`metrics_enabled=false` answers `404` rather than serving an empty document: a scrape\nthat is switched off should look switched off, and a `404` is what an operator's scrape\nconfig will report as a failure to collect. The registry is this process's own\n(`app/observability.py` states the ceiling): no cross-process aggregation, so a scrape\nreads the web container's numbers and the worker's separately.",
+        "operationId": "metrics_api_v1_metrics_get",
+        "responses": {
+          "200": {
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Prometheus text format"
+          },
+          "400": {
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The request could not be understood"
+          },
+          "401": {
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The caller is not identified"
+          },
+          "403": {
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The caller may not do this"
+          },
+          "404": {
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The company, document or route does not exist"
+          },
+          "409": {
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The request clashes with one already made"
+          },
+          "422": {
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The request did not match the contract, or a domain rule refused it"
+          },
+          "500": {
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The platform failed unexpectedly"
+          }
+        },
+        "summary": "Metrics",
+        "tags": [
+          "platform"
+        ]
+      }
+    },
     "/api/v1/opportunities": {
       "post": {
         "description": "Put a deal on the board, in the first stage unless another is named.\n\nThe opening move is recorded like every other one, and its actor is the request's,\nso a card's history starts at the column it was created in rather than at the\nfirst time somebody dragged it.",
         "operationId": "new_opportunity_api_v1_opportunities_post",
-        "parameters": [
-          {
-            "in": "header",
-            "name": "x-company-id",
-            "required": true,
-            "schema": {
-              "title": "X-Company-Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-actor",
-            "required": false,
-            "schema": {
-              "default": "unknown",
-              "title": "X-Actor",
-              "type": "string"
-            }
-          }
-        ],
         "requestBody": {
           "content": {
             "application/json": {
@@ -6693,25 +9047,6 @@
             "schema": {
               "format": "uuid",
               "title": "Opportunity Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-company-id",
-            "required": true,
-            "schema": {
-              "title": "X-Company-Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-actor",
-            "required": false,
-            "schema": {
-              "default": "unknown",
-              "title": "X-Actor",
               "type": "string"
             }
           }
@@ -6828,25 +9163,6 @@
               "title": "Opportunity Id",
               "type": "string"
             }
-          },
-          {
-            "in": "header",
-            "name": "x-company-id",
-            "required": true,
-            "schema": {
-              "title": "X-Company-Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-actor",
-            "required": false,
-            "schema": {
-              "default": "unknown",
-              "title": "X-Actor",
-              "type": "string"
-            }
           }
         ],
         "requestBody": {
@@ -6959,25 +9275,6 @@
             "schema": {
               "format": "uuid",
               "title": "Opportunity Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-company-id",
-            "required": true,
-            "schema": {
-              "title": "X-Company-Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-actor",
-            "required": false,
-            "schema": {
-              "default": "unknown",
-              "title": "X-Actor",
               "type": "string"
             }
           }
@@ -7094,25 +9391,6 @@
               "title": "On",
               "type": "string"
             }
-          },
-          {
-            "in": "header",
-            "name": "x-company-id",
-            "required": true,
-            "schema": {
-              "title": "X-Company-Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-actor",
-            "required": false,
-            "schema": {
-              "default": "unknown",
-              "title": "X-Actor",
-              "type": "string"
-            }
           }
         ],
         "responses": {
@@ -7207,27 +9485,6 @@
       "get": {
         "description": "The opportunity board as this caller may see it.\n\nRead-only, and the columns are whatever the company configured \u2014 no stage list\nis compiled in. The payload is filtered per field permission before it leaves,\nso a restricted value is not in the response at all; it is returned as a\n`JSONResponse` for that reason, rather than validated into a model whose\ndefaults would put a null back where a field was deliberately omitted.",
         "operationId": "pipeline_board_view_api_v1_pipeline_board_get",
-        "parameters": [
-          {
-            "in": "header",
-            "name": "x-company-id",
-            "required": true,
-            "schema": {
-              "title": "X-Company-Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-actor",
-            "required": false,
-            "schema": {
-              "default": "unknown",
-              "title": "X-Actor",
-              "type": "string"
-            }
-          }
-        ],
         "responses": {
           "200": {
             "content": {
@@ -7324,27 +9581,6 @@
       "post": {
         "description": "Add a column to the company's board.\n\nThis is the whole of \"configurable without code change\": the board is the rows\nthis endpoint has written, in their stated order, and `is_won`/`is_lost` are what\ngive a column its meaning while the name stays the company's own.",
         "operationId": "new_pipeline_stage_api_v1_pipeline_stages_post",
-        "parameters": [
-          {
-            "in": "header",
-            "name": "x-company-id",
-            "required": true,
-            "schema": {
-              "title": "X-Company-Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-actor",
-            "required": false,
-            "schema": {
-              "default": "unknown",
-              "title": "X-Actor",
-              "type": "string"
-            }
-          }
-        ],
         "requestBody": {
           "content": {
             "application/json": {
@@ -7447,27 +9683,6 @@
       "get": {
         "description": "Everything this supplier may see \u2014 its RFQs, its released orders and its invoices.",
         "operationId": "portal_view_api_v1_portal_documents_get",
-        "parameters": [
-          {
-            "in": "header",
-            "name": "x-company-id",
-            "required": true,
-            "schema": {
-              "title": "X-Company-Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-actor",
-            "required": false,
-            "schema": {
-              "default": "unknown",
-              "title": "X-Actor",
-              "type": "string"
-            }
-          }
-        ],
         "responses": {
           "200": {
             "content": {
@@ -7560,27 +9775,6 @@
       "post": {
         "description": "Submit an invoice as a draft \u2014 posting and matching stay the buyer's review.",
         "operationId": "portal_invoice_api_v1_portal_invoices_post",
-        "parameters": [
-          {
-            "in": "header",
-            "name": "x-company-id",
-            "required": true,
-            "schema": {
-              "title": "X-Company-Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-actor",
-            "required": false,
-            "schema": {
-              "default": "unknown",
-              "title": "X-Actor",
-              "type": "string"
-            }
-          }
-        ],
         "requestBody": {
           "content": {
             "application/json": {
@@ -7692,25 +9886,6 @@
               "title": "Number",
               "type": "string"
             }
-          },
-          {
-            "in": "header",
-            "name": "x-company-id",
-            "required": true,
-            "schema": {
-              "title": "X-Company-Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-actor",
-            "required": false,
-            "schema": {
-              "default": "unknown",
-              "title": "X-Actor",
-              "type": "string"
-            }
           }
         ],
         "responses": {
@@ -7812,25 +9987,6 @@
             "required": true,
             "schema": {
               "title": "Number",
-              "type": "string"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-company-id",
-            "required": true,
-            "schema": {
-              "title": "X-Company-Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-actor",
-            "required": false,
-            "schema": {
-              "default": "unknown",
-              "title": "X-Actor",
               "type": "string"
             }
           }
@@ -7937,27 +10093,6 @@
       "post": {
         "description": "State, change or withdraw whether this company's tills need an open shift.",
         "operationId": "set_pos_cash_drawer_policy_api_v1_pos_cash_drawer_policy_post",
-        "parameters": [
-          {
-            "in": "header",
-            "name": "x-company-id",
-            "required": true,
-            "schema": {
-              "title": "X-Company-Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-actor",
-            "required": false,
-            "schema": {
-              "default": "unknown",
-              "title": "X-Actor",
-              "type": "string"
-            }
-          }
-        ],
         "requestBody": {
           "content": {
             "application/json": {
@@ -8060,27 +10195,6 @@
       "post": {
         "description": "Record cash in or out of the drawer outside a sale, with its reason.",
         "operationId": "record_drawer_movement_api_v1_pos_drawer_movements_post",
-        "parameters": [
-          {
-            "in": "header",
-            "name": "x-company-id",
-            "required": true,
-            "schema": {
-              "title": "X-Company-Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-actor",
-            "required": false,
-            "schema": {
-              "default": "unknown",
-              "title": "X-Actor",
-              "type": "string"
-            }
-          }
-        ],
         "requestBody": {
           "content": {
             "application/json": {
@@ -8209,25 +10323,6 @@
               ],
               "title": "Terminal"
             }
-          },
-          {
-            "in": "header",
-            "name": "x-company-id",
-            "required": true,
-            "schema": {
-              "title": "X-Company-Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-actor",
-            "required": false,
-            "schema": {
-              "default": "unknown",
-              "title": "X-Actor",
-              "type": "string"
-            }
           }
         ],
         "responses": {
@@ -8322,27 +10417,6 @@
       "post": {
         "description": "Start a basket at one till. Nothing has moved: no stock, no posting.",
         "operationId": "open_pos_sale_api_v1_pos_sales_post",
-        "parameters": [
-          {
-            "in": "header",
-            "name": "x-company-id",
-            "required": true,
-            "schema": {
-              "title": "X-Company-Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-actor",
-            "required": false,
-            "schema": {
-              "default": "unknown",
-              "title": "X-Actor",
-              "type": "string"
-            }
-          }
-        ],
         "requestBody": {
           "content": {
             "application/json": {
@@ -8454,25 +10528,6 @@
               "title": "Number",
               "type": "string"
             }
-          },
-          {
-            "in": "header",
-            "name": "x-company-id",
-            "required": true,
-            "schema": {
-              "title": "X-Company-Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-actor",
-            "required": false,
-            "schema": {
-              "default": "unknown",
-              "title": "X-Actor",
-              "type": "string"
-            }
           }
         ],
         "responses": {
@@ -8576,25 +10631,6 @@
               "title": "Number",
               "type": "string"
             }
-          },
-          {
-            "in": "header",
-            "name": "x-company-id",
-            "required": true,
-            "schema": {
-              "title": "X-Company-Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-actor",
-            "required": false,
-            "schema": {
-              "default": "unknown",
-              "title": "X-Actor",
-              "type": "string"
-            }
           }
         ],
         "responses": {
@@ -8696,25 +10732,6 @@
             "required": true,
             "schema": {
               "title": "Number",
-              "type": "string"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-company-id",
-            "required": true,
-            "schema": {
-              "title": "X-Company-Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-actor",
-            "required": false,
-            "schema": {
-              "default": "unknown",
-              "title": "X-Actor",
               "type": "string"
             }
           }
@@ -8830,25 +10847,6 @@
               "title": "Number",
               "type": "string"
             }
-          },
-          {
-            "in": "header",
-            "name": "x-company-id",
-            "required": true,
-            "schema": {
-              "title": "X-Company-Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-actor",
-            "required": false,
-            "schema": {
-              "default": "unknown",
-              "title": "X-Actor",
-              "type": "string"
-            }
           }
         ],
         "requestBody": {
@@ -8962,25 +10960,6 @@
               "title": "Number",
               "type": "string"
             }
-          },
-          {
-            "in": "header",
-            "name": "x-company-id",
-            "required": true,
-            "schema": {
-              "title": "X-Company-Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-actor",
-            "required": false,
-            "schema": {
-              "default": "unknown",
-              "title": "X-Actor",
-              "type": "string"
-            }
           }
         ],
         "requestBody": {
@@ -9085,27 +11064,6 @@
       "post": {
         "description": "Open a shift on a terminal with its float; a second on that till is refused.",
         "operationId": "open_pos_shift_api_v1_pos_shifts_post",
-        "parameters": [
-          {
-            "in": "header",
-            "name": "x-company-id",
-            "required": true,
-            "schema": {
-              "title": "X-Company-Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-actor",
-            "required": false,
-            "schema": {
-              "default": "unknown",
-              "title": "X-Actor",
-              "type": "string"
-            }
-          }
-        ],
         "requestBody": {
           "content": {
             "application/json": {
@@ -9217,25 +11175,6 @@
               "title": "Terminal",
               "type": "string"
             }
-          },
-          {
-            "in": "header",
-            "name": "x-company-id",
-            "required": true,
-            "schema": {
-              "title": "X-Company-Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-actor",
-            "required": false,
-            "schema": {
-              "default": "unknown",
-              "title": "X-Actor",
-              "type": "string"
-            }
           }
         ],
         "responses": {
@@ -9337,25 +11276,6 @@
             "required": true,
             "schema": {
               "title": "Shift Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-company-id",
-            "required": true,
-            "schema": {
-              "title": "X-Company-Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-actor",
-            "required": false,
-            "schema": {
-              "default": "unknown",
-              "title": "X-Actor",
               "type": "string"
             }
           }
@@ -9469,25 +11389,6 @@
             "required": true,
             "schema": {
               "title": "Idempotency-Key",
-              "type": "string"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-company-id",
-            "required": true,
-            "schema": {
-              "title": "X-Company-Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-actor",
-            "required": false,
-            "schema": {
-              "default": "unknown",
-              "title": "X-Actor",
               "type": "string"
             }
           }
@@ -9610,25 +11511,6 @@
               ],
               "title": "Terminal"
             }
-          },
-          {
-            "in": "header",
-            "name": "x-company-id",
-            "required": true,
-            "schema": {
-              "title": "X-Company-Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-actor",
-            "required": false,
-            "schema": {
-              "default": "unknown",
-              "title": "X-Actor",
-              "type": "string"
-            }
           }
         ],
         "responses": {
@@ -9731,25 +11613,6 @@
             "schema": {
               "format": "date",
               "title": "On",
-              "type": "string"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-company-id",
-            "required": true,
-            "schema": {
-              "title": "X-Company-Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-actor",
-            "required": false,
-            "schema": {
-              "default": "unknown",
-              "title": "X-Actor",
               "type": "string"
             }
           }
@@ -9855,25 +11718,6 @@
               "title": "Shift Id",
               "type": "string"
             }
-          },
-          {
-            "in": "header",
-            "name": "x-company-id",
-            "required": true,
-            "schema": {
-              "title": "X-Company-Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-actor",
-            "required": false,
-            "schema": {
-              "default": "unknown",
-              "title": "X-Actor",
-              "type": "string"
-            }
           }
         ],
         "responses": {
@@ -9968,27 +11812,6 @@
       "post": {
         "description": "File one pricing rule.",
         "operationId": "create_price_rule_api_v1_price_rules_post",
-        "parameters": [
-          {
-            "in": "header",
-            "name": "x-company-id",
-            "required": true,
-            "schema": {
-              "title": "X-Company-Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-actor",
-            "required": false,
-            "schema": {
-              "default": "unknown",
-              "title": "X-Actor",
-              "type": "string"
-            }
-          }
-        ],
         "requestBody": {
           "content": {
             "application/json": {
@@ -10091,27 +11914,6 @@
       "post": {
         "description": "What the engine makes of one prospective line, and the order it decided in.\n\nThe tier comes from the customer when one is named, so a caller cannot price a\ncustomer's order under a tier that customer does not sit in.",
         "operationId": "resolve_price_rule_api_v1_price_rules_resolve_post",
-        "parameters": [
-          {
-            "in": "header",
-            "name": "x-company-id",
-            "required": true,
-            "schema": {
-              "title": "X-Company-Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-actor",
-            "required": false,
-            "schema": {
-              "default": "unknown",
-              "title": "X-Actor",
-              "type": "string"
-            }
-          }
-        ],
         "requestBody": {
           "content": {
             "application/json": {
@@ -10214,27 +12016,6 @@
       "post": {
         "description": "Raise a quotation with its priced lines and its validity window.",
         "operationId": "new_quotation_api_v1_quotations_post",
-        "parameters": [
-          {
-            "in": "header",
-            "name": "x-company-id",
-            "required": true,
-            "schema": {
-              "title": "X-Company-Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-actor",
-            "required": false,
-            "schema": {
-              "default": "unknown",
-              "title": "X-Actor",
-              "type": "string"
-            }
-          }
-        ],
         "requestBody": {
           "content": {
             "application/json": {
@@ -10346,25 +12127,6 @@
               "title": "Number",
               "type": "string"
             }
-          },
-          {
-            "in": "header",
-            "name": "x-company-id",
-            "required": true,
-            "schema": {
-              "title": "X-Company-Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-actor",
-            "required": false,
-            "schema": {
-              "default": "unknown",
-              "title": "X-Actor",
-              "type": "string"
-            }
           }
         ],
         "responses": {
@@ -10466,25 +12228,6 @@
             "required": true,
             "schema": {
               "title": "Number",
-              "type": "string"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-company-id",
-            "required": true,
-            "schema": {
-              "title": "X-Company-Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-actor",
-            "required": false,
-            "schema": {
-              "default": "unknown",
-              "title": "X-Actor",
               "type": "string"
             }
           }
@@ -10600,25 +12343,6 @@
               "title": "Number",
               "type": "string"
             }
-          },
-          {
-            "in": "header",
-            "name": "x-company-id",
-            "required": true,
-            "schema": {
-              "title": "X-Company-Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-actor",
-            "required": false,
-            "schema": {
-              "default": "unknown",
-              "title": "X-Actor",
-              "type": "string"
-            }
           }
         ],
         "requestBody": {
@@ -10719,31 +12443,112 @@
         ]
       }
     },
+    "/api/v1/ready": {
+      "get": {
+        "description": "Readiness: the database answers and the schema is at the revision this build expects.\n\nAnswers `503` (not `500`) when it is not ready, because \"not ready yet\" is a state a\ndeployment moves out of, and a load balancer needs the distinction. The body names what\nis not ready and never why \u2014 the exception is in the log, and this route is public\n(T-8.OBS.01, `SECURITY-REVIEW.md`'s access matrix).",
+        "operationId": "ready_api_v1_ready_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReadinessOut"
+                }
+              }
+            },
+            "description": "the instance can serve"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The request could not be understood"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The caller is not identified"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The caller may not do this"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The company, document or route does not exist"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The request clashes with one already made"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The request did not match the contract, or a domain rule refused it"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "The platform failed unexpectedly"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReadinessOut"
+                }
+              }
+            },
+            "description": "the instance cannot serve yet"
+          }
+        },
+        "summary": "Ready",
+        "tags": [
+          "platform"
+        ]
+      }
+    },
     "/api/v1/reports": {
       "post": {
         "description": "Register a report: its schedule and its recipients are rows (T-0.REPORT.01).",
         "operationId": "register_report_definition_api_v1_reports_post",
-        "parameters": [
-          {
-            "in": "header",
-            "name": "x-company-id",
-            "required": true,
-            "schema": {
-              "title": "X-Company-Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-actor",
-            "required": false,
-            "schema": {
-              "default": "unknown",
-              "title": "X-Actor",
-              "type": "string"
-            }
-          }
-        ],
         "requestBody": {
           "content": {
             "application/json": {
@@ -10846,27 +12651,6 @@
       "get": {
         "description": "What can be scheduled, with each report's scope, period and capability.\n\nRead rather than delivered: an operator scheduling the month-end pack needs to know what\nthe platform produces and what it takes to see each one (T-6.ANALYTICS.02). What is\n*registered* for this company is `report_definition`'s own rows.",
         "operationId": "read_report_catalogue_api_v1_reports_catalogue_get",
-        "parameters": [
-          {
-            "in": "header",
-            "name": "x-company-id",
-            "required": true,
-            "schema": {
-              "title": "X-Company-Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-actor",
-            "required": false,
-            "schema": {
-              "default": "unknown",
-              "title": "X-Actor",
-              "type": "string"
-            }
-          }
-        ],
         "responses": {
           "200": {
             "content": {
@@ -10985,25 +12769,6 @@
               ],
               "title": "Period"
             }
-          },
-          {
-            "in": "header",
-            "name": "x-company-id",
-            "required": true,
-            "schema": {
-              "title": "X-Company-Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-actor",
-            "required": false,
-            "schema": {
-              "default": "unknown",
-              "title": "X-Actor",
-              "type": "string"
-            }
           }
         ],
         "responses": {
@@ -11098,27 +12863,6 @@
       "post": {
         "description": "Issue an RFQ against an approved requisition to one or more suppliers.",
         "operationId": "new_rfq_api_v1_rfqs_post",
-        "parameters": [
-          {
-            "in": "header",
-            "name": "x-company-id",
-            "required": true,
-            "schema": {
-              "title": "X-Company-Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-actor",
-            "required": false,
-            "schema": {
-              "default": "unknown",
-              "title": "X-Actor",
-              "type": "string"
-            }
-          }
-        ],
         "requestBody": {
           "content": {
             "application/json": {
@@ -11230,25 +12974,6 @@
               "title": "Number",
               "type": "string"
             }
-          },
-          {
-            "in": "header",
-            "name": "x-company-id",
-            "required": true,
-            "schema": {
-              "title": "X-Company-Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-actor",
-            "required": false,
-            "schema": {
-              "default": "unknown",
-              "title": "X-Actor",
-              "type": "string"
-            }
           }
         ],
         "responses": {
@@ -11350,25 +13075,6 @@
             "required": true,
             "schema": {
               "title": "Number",
-              "type": "string"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-company-id",
-            "required": true,
-            "schema": {
-              "title": "X-Company-Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-actor",
-            "required": false,
-            "schema": {
-              "default": "unknown",
-              "title": "X-Actor",
               "type": "string"
             }
           }
@@ -11484,25 +13190,6 @@
               "title": "Number",
               "type": "string"
             }
-          },
-          {
-            "in": "header",
-            "name": "x-company-id",
-            "required": true,
-            "schema": {
-              "title": "X-Company-Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-actor",
-            "required": false,
-            "schema": {
-              "default": "unknown",
-              "title": "X-Actor",
-              "type": "string"
-            }
           }
         ],
         "responses": {
@@ -11604,25 +13291,6 @@
             "required": true,
             "schema": {
               "title": "Number",
-              "type": "string"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-company-id",
-            "required": true,
-            "schema": {
-              "title": "X-Company-Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-actor",
-            "required": false,
-            "schema": {
-              "default": "unknown",
-              "title": "X-Actor",
               "type": "string"
             }
           }
@@ -11736,25 +13404,6 @@
             "required": true,
             "schema": {
               "title": "Number",
-              "type": "string"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-company-id",
-            "required": true,
-            "schema": {
-              "title": "X-Company-Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-actor",
-            "required": false,
-            "schema": {
-              "default": "unknown",
-              "title": "X-Actor",
               "type": "string"
             }
           }
@@ -11879,25 +13528,6 @@
               "title": "Line No",
               "type": "integer"
             }
-          },
-          {
-            "in": "header",
-            "name": "x-company-id",
-            "required": true,
-            "schema": {
-              "title": "X-Company-Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-actor",
-            "required": false,
-            "schema": {
-              "default": "unknown",
-              "title": "X-Actor",
-              "type": "string"
-            }
           }
         ],
         "requestBody": {
@@ -12009,25 +13639,6 @@
             "required": true,
             "schema": {
               "title": "Number",
-              "type": "string"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-company-id",
-            "required": true,
-            "schema": {
-              "title": "X-Company-Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-actor",
-            "required": false,
-            "schema": {
-              "default": "unknown",
-              "title": "X-Actor",
               "type": "string"
             }
           }

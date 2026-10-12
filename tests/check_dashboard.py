@@ -49,6 +49,8 @@ from sqlalchemy.orm import Session
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
+from tests.identity import sign_in  # noqa: E402
+
 
 from app import analytics  # noqa: E402
 from app.analytics import TILES  # noqa: E402
@@ -104,11 +106,17 @@ def _leaves(node):
         yield node
 
 
+# The engine the helpers sign in against. `main` builds it from DATABASE_URL and states it
+# here, because `_get` is called from inside the check's own blocks, where the local name is
+# not in scope (T-7.AUTH.02's migration of the identity this check used to state by header).
+ENGINE = None
+
+
 def _get(client: TestClient, company_id: uuid.UUID, actor: str, **params) -> dict:
     query = "&".join(f"{key}={value}" for key, value in params.items() if value is not None)
     response = client.get(
         f"{BASE}/dashboard{f'?{query}' if query else ''}",
-        headers={"X-Company-Id": str(company_id), "X-Actor": actor},
+        headers=sign_in(ENGINE, company_id=company_id, actor=actor),
     )
     assert response.status_code == 200, response.text
     return response.json()
@@ -120,7 +128,9 @@ def main() -> int:
         print("DATABASE_URL is required (a scratch Postgres)", file=sys.stderr)
         return 2
 
+    global ENGINE
     engine = create_engine(url)
+    ENGINE = engine
     with engine.begin() as connection:
         connection.exec_driver_sql("DROP SCHEMA public CASCADE")
         connection.exec_driver_sql("CREATE SCHEMA public")
@@ -462,13 +472,13 @@ def main() -> int:
     assert "2026-09-01 to 2026-09-30" in default["label"], default["label"]
     backwards = client.get(
         f"{BASE}/dashboard?as_of=2026-09-30&start=2026-10-31",
-        headers={"X-Company-Id": str(company_id), "X-Actor": "tina"},
+        headers=sign_in(engine, company_id=company_id, actor="tina"),
     )
     assert backwards.status_code == 422, backwards.text
     assert backwards.json()["error"]["code"] == "invalid_window", backwards.json()
     missing = client.get(
         f"{BASE}/dashboard?drill_down=finance.nothing",
-        headers={"X-Company-Id": str(company_id), "X-Actor": "tina"},
+        headers=sign_in(engine, company_id=company_id, actor="tina"),
     )
     assert missing.status_code == 404 and missing.json()["error"]["code"] == "no_dashboard_tile", (
         missing.text

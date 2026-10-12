@@ -39,16 +39,18 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import os
 import uuid
 from collections.abc import Iterator
 from datetime import date, datetime, timezone
 from decimal import Decimal, InvalidOperation
 from typing import Annotated, Any
+from urllib.parse import quote
 
-from fastapi import Depends, FastAPI, Header, Query, Request
+from fastapi import Depends, FastAPI, Header, Query, Request, Response
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, PlainTextResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import (
     DateTime,
@@ -58,12 +60,14 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
     Uuid,
+    create_engine,
     func,
     select,
 )
 from sqlalchemy.orm import Mapped, Session, mapped_column
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
+from app import config, delivery, observability
 from app.audit import set_actor
 from app.company import (
     CREDIT_CHECK_MODES,
@@ -246,10 +250,37 @@ from app.hr.employees import EMPLOYEE_ENTITY
 from app.hr.org import org_chart
 from app.security import (
     AccessDenied,
+    Role,
+    assign as assign_role,
+    capabilities as capabilities_held,
+    define_role,
+    grant,
     hidden_fields,
     readable_fields,
     reject_restricted_fields,
     require,
+    restrict,
+    roles_for,
+)
+from app import auth, identity
+from app.bootstrap import (
+    ADMINISTRATOR as ADMINISTRATOR_ROLE,
+    BootstrapError,
+    create_company as installer,
+    declared_capabilities,
+)
+from app.company import (
+    UnknownCompanyStatus,
+    set_company_status,
+)
+from app.identity import (
+    CompanySuspended,
+    IdentityError,
+    MfaError,
+    NotAMemberError,
+    RefusedSignIn,
+    UnknownCompanyCode,
+    UserExistsError,
 )
 
 # The published version. A breaking change means a new value here, a new
@@ -281,12 +312,13 @@ def _error(status_code: int, code: str, message: str, details: Any = None) -> JS
     )
 
 
-# --- Identity, stated on the request -----------------------------------------
-# SEC.01 owns authentication and permissions; until it exists the request states
-# who it is and which company it is for, and both are recorded the same way the
-# authenticated claims will be.
-# ponytail: headers, not a token. Ceiling: any caller may claim any actor.
-# Upgrade path: T-0.SEC.01 verifies the claims and calls these same setters.
+# --- Identity, from the verified session -------------------------------------
+# T-7.AUTH.02 replaced the two request headers T-0.API.01 documented as a placeholder
+# ("any caller may claim any actor"). Company and actor now come from a session row
+# minted against a verified credential, and the ceiling that comment carried is closed
+# rather than restated. Nothing downstream moved: a session resolves to the same login
+# string (`actor`) that roles, field restrictions, the trail and every endpoint already
+# keyed on.
 
 
 class RequestContext(BaseModel):
@@ -297,27 +329,84 @@ class RequestContext(BaseModel):
     company_id: uuid.UUID
     actor: str
     session: Session
+    # The session this request came in on, so a route can revoke exactly this one.
+    session_token: str | None = None
+    # The resolved sign-in itself, for the few routes that need more than the company
+    # and the subject (the session flow and the company switch).
+    resolved: identity.SignIn | None = None
 
 
-def context(
-    x_company_id: Annotated[str, Header()],
-    x_actor: Annotated[str, Header()] = "unknown",
-) -> Iterator[RequestContext]:
-    """Bind a session to the requesting company and actor, then close it."""
-    try:
-        company_id = uuid.UUID(x_company_id)
-    except ValueError as exc:
-        raise ApiError(
-            400, "invalid_company", f"X-Company-Id is not a company id: {x_company_id!r}"
-        ) from exc
+def _resolved(context: RequestContext) -> identity.SignIn:
+    """The sign-in behind this request. Every request has one — `context` refuses without."""
+    if context.resolved is None:  # pragma: no cover - context always resolves one
+        raise ApiError(401, auth.UNAUTHENTICATED_CODE, "this request carries no session")
+    return context.resolved
 
+
+def _bound_context(session: Session, resolved: identity.SignIn, token: str | None):
+    """Bind a request's session to the company and actor the session resolved to."""
+    scope_to_company(session, resolved.company.id)
+    set_actor(session, resolved.subject)
+    return RequestContext(
+        company_id=resolved.company.id,
+        actor=resolved.subject,
+        session=session,
+        session_token=token,
+        resolved=resolved,
+    )
+
+
+def context(request: Request) -> Iterator[RequestContext]:
+    """Bind a session to the identity the request's cookie proves, then close it.
+
+    Every refusal here is raised by :mod:`app.auth` and answered by the handlers
+    below: `401` for no session, `401 mfa_required` for one that still owes a second
+    factor, `403 company_suspended` for a company that is not trading.
+    """
     with Session(_engine()) as session:
-        scope_to_company(session, company_id)
-        set_actor(session, x_actor)
-        yield RequestContext(company_id=company_id, actor=x_actor, session=session)
+        resolved = auth.current_identity(session, request)
+        yield _bound_context(session, resolved, auth.request_token(request))
+
+
+def pending_context(request: Request) -> Iterator[RequestContext]:
+    """The same binding, for a session that still owes its second factor.
+
+    Used by the MFA route alone: a half-finished sign-in must be able to finish, and
+    may reach nothing else.
+    """
+    with Session(_engine()) as session:
+        resolved = auth.current_identity(session, request, allow_pending_mfa=True)
+        yield _bound_context(session, resolved, auth.request_token(request))
+
+
+def suspended_context(request: Request) -> Iterator[RequestContext]:
+    """The binding for the one route a suspended company may still reach.
+
+    Reinstatement has to be possible from inside the thing that was suspended, or
+    suspension is a one-way door. The route that uses this still asks for the
+    capability it needs; only the suspension refusal is lifted.
+    """
+    with Session(_engine()) as session:
+        resolved = auth.current_identity(session, request, allow_suspended=True)
+        yield _bound_context(session, resolved, auth.request_token(request))
 
 
 Context = Annotated[RequestContext, Depends(context)]
+PendingContext = Annotated[RequestContext, Depends(pending_context)]
+SuspendedContext = Annotated[RequestContext, Depends(suspended_context)]
+
+
+def _over_https(request: Request) -> bool:
+    """Whether the request arrived over TLS — what decides the cookie's `Secure` flag.
+
+    Read from the forwarded scheme first, because behind the reverse proxy of
+    T-9.EDGE.01 the connection to this process is plain HTTP while the connection from
+    the browser is not.
+    """
+    forwarded = request.headers.get("x-forwarded-proto", "")
+    if forwarded:
+        return forwarded.split(",")[0].strip().lower() == "https"
+    return request.url.scheme == "https"
 
 
 # --- The contract's payloads -------------------------------------------------
@@ -381,12 +470,34 @@ class CompanyOut(BaseModel):
     name: str
     base_currency: str
     fiscal_year_start_month: int
+    # T-7.ADMIN.03: whether this company is trading. Published so a shell can say so
+    # rather than showing a screen that will refuse everything it asks for.
+    status: str
     # T-3.SALES.04: the credit-check policy this company has stated, or null when it has
     # stated none — which the order-time check treats differently from "off".
     credit_check_mode: str | None = None
     # T-3.POS.03: whether this company's tills must trade inside an open shift. Null is
     # "not stated", which reads as "no drawer management" — the ordinary shop.
     cash_drawer_required: bool | None = None
+
+
+def _company_out(company: Company) -> CompanyOut:
+    """A company as the boundary publishes it.
+
+    One place, because there is more than one route that answers with a company, and
+    T-7.ADMIN.03 added `status` to that payload and missed two of them — a field added to
+    five of six responses is a 500 on the sixth, which is how this was found.
+    """
+    return CompanyOut(
+        id=str(company.id),
+        code=company.code,
+        name=company.name,
+        base_currency=company.base_currency,
+        fiscal_year_start_month=company.fiscal_year_start_month,
+        status=company.status,
+        credit_check_mode=company.credit_check_mode,
+        cash_drawer_required=company.cash_drawer_required,
+    )
 
 
 class CreditCheckModeIn(BaseModel):
@@ -569,6 +680,24 @@ class HealthOut(BaseModel):
     version: str
 
 
+class ReadinessCheckOut(BaseModel):
+    """One dependency, its state, and a reason safe to publish (T-8.OBS.01)."""
+
+    name: str
+    ok: bool
+    detail: str
+    # The revision the database reports, when the check is the migration one.
+    revision: str | None = None
+
+
+class ReadinessOut(BaseModel):
+    """What `/api/v1/ready` answers: whether this instance can serve, and each check."""
+
+    status: str
+    version: str
+    checks: list[ReadinessCheckOut]
+
+
 class ErrorDetail(BaseModel):
     """The one thing every refusal says: a machine code, a message, the detail."""
 
@@ -742,19 +871,47 @@ def _visible_entry(session: Session, context: RequestContext, payload: dict) -> 
 
 
 _ENGINE = None
+_READY_ENGINE = None
 
 
 def _engine():
-    """The application's engine, from the environment like every other setting."""
-    from sqlalchemy import create_engine
+    """The application's engine, from the configuration read at start.
 
+    T-8.CFG.01: the URL is validated when the process starts (``app/config.py``'s
+    :data:`~app.config.SETTINGS`), so it is not read here at all — this used to read
+    ``DATABASE_URL`` on the first request and answer that request with a `500`
+    (finding 26 of the 2026-10-10 audit). A missing or malformed URL stops the process
+    instead, naming the variable.
+    """
     global _ENGINE
     if _ENGINE is None:
-        url = os.environ.get("DATABASE_URL")
-        if not url:
-            raise ApiError(500, "not_configured", "DATABASE_URL is not set")
-        _ENGINE = create_engine(url, pool_pre_ping=True)
+        _ENGINE = create_engine(config.SETTINGS.database_url, pool_pre_ping=True)
     return _ENGINE
+
+
+def _readiness_engine():
+    """The engine the readiness probe uses: its own connection, on a stated timeout.
+
+    Separate from the application's pool on purpose — a probe must not wait behind a queue
+    of requests, and it must give up in ``READINESS_TIMEOUT_SECONDS`` (§9) rather than
+    whenever libpq's own default expires. ``statement_timeout`` is what makes "the database
+    answers" a claim with a deadline: a database that accepts a connection and then hangs
+    would otherwise answer the probe later than the caller was willing to wait.
+    """
+    global _READY_ENGINE
+    if _READY_ENGINE is None:
+        seconds = config.SETTINGS.readiness_timeout_seconds
+        _READY_ENGINE = create_engine(
+            config.SETTINGS.database_url,
+            pool_pre_ping=True,
+            pool_size=1,
+            max_overflow=0,
+            connect_args={
+                "connect_timeout": seconds,
+                "options": f"-c statement_timeout={seconds * 1000}",
+            },
+        )
+    return _READY_ENGINE
 
 
 app = FastAPI(
@@ -765,10 +922,99 @@ app = FastAPI(
     responses=ERROR_RESPONSES,
 )
 
+# --- Start (T-8.OBS.01, T-8.DELIVERY.01) --------------------------------------
+# Importing this module *is* the start: uvicorn imports it before it binds, so everything
+# below has happened before the first request is accepted — the log format, the request
+# middleware, the outbound channels a configured install can actually send on, and the
+# configuration itself. `app/config.py` has already refused a broken environment by here.
+observability.configure(config.SETTINGS)
+app.add_middleware(observability.RequestContext)
+delivery.register_configured()
+observability.log(
+    "info",
+    "the application is starting",
+    version=API_VERSION,
+    **{key: value for key, value in config.describe().items()},
+)
+
 
 @app.exception_handler(ApiError)
 async def _api_error(_request: Request, exc: ApiError) -> JSONResponse:
     return _error(exc.status_code, exc.code, exc.message, exc.details)
+
+
+# T-7.AUTH.02 — the three refusals the session boundary raises, answered in the one
+# shape like every other refusal in this tree.
+
+
+@app.exception_handler(auth.NotAuthenticated)
+async def _not_authenticated(_request: Request, exc: auth.NotAuthenticated) -> JSONResponse:
+    return _error(401, auth.UNAUTHENTICATED_CODE, str(exc))
+
+
+@app.exception_handler(auth.MfaPending)
+async def _mfa_pending(_request: Request, exc: auth.MfaPending) -> JSONResponse:
+    return _error(401, auth.MFA_REQUIRED_CODE, str(exc))
+
+
+@app.exception_handler(auth.SuspendedCompany)
+async def _suspended_company(_request: Request, exc: auth.SuspendedCompany) -> JSONResponse:
+    return _error(403, auth.SUSPENDED_COMPANY_CODE, str(exc))
+
+
+# T-7.AUTH.01 … T-7.ADMIN.03 — identity and administration. A sign-in that was refused
+# answers like any other refusal, and always with the same uninformative message: a
+# caller cannot tell a wrong password from a login that does not exist.
+
+
+@app.exception_handler(RefusedSignIn)
+async def _refused_sign_in(_request: Request, exc: RefusedSignIn) -> JSONResponse:
+    return _error(401, auth.UNAUTHENTICATED_CODE, str(exc))
+
+
+@app.exception_handler(MfaError)
+async def _mfa_error(_request: Request, exc: MfaError) -> JSONResponse:
+    return _error(401, "invalid_second_factor", str(exc))
+
+
+@app.exception_handler(UserExistsError)
+async def _user_exists(_request: Request, exc: UserExistsError) -> JSONResponse:
+    return _error(409, "user_exists", str(exc))
+
+
+@app.exception_handler(NotAMemberError)
+async def _not_a_member(_request: Request, exc: NotAMemberError) -> JSONResponse:
+    return _error(403, "not_a_member", str(exc))
+
+
+@app.exception_handler(CompanySuspended)
+async def _company_suspended(_request: Request, exc: CompanySuspended) -> JSONResponse:
+    """A sign-in into a suspended company answers like any other suspended-company call."""
+    return _error(403, auth.SUSPENDED_COMPANY_CODE, str(exc))
+
+
+@app.exception_handler(UnknownCompanyCode)
+async def _unknown_company_code(_request: Request, exc: UnknownCompanyCode) -> JSONResponse:
+    return _error(404, "unknown_company", str(exc))
+
+
+@app.exception_handler(UnknownCompanyStatus)
+async def _unknown_company_status(
+    _request: Request, exc: UnknownCompanyStatus
+) -> JSONResponse:
+    return _error(422, "unknown_company_status", str(exc))
+
+
+@app.exception_handler(IdentityError)
+async def _identity_error(_request: Request, exc: IdentityError) -> JSONResponse:
+    return _error(422, "identity_error", str(exc))
+
+
+@app.exception_handler(BootstrapError)
+async def _bootstrap_error(_request: Request, exc: BootstrapError) -> JSONResponse:
+    """A company that cannot be provisioned as asked — a taken code, an unconfirmed
+    fiscal calendar — is refused with the pack's own reason, not a 500."""
+    return _error(422, "provisioning_refused", str(exc))
 
 
 @app.exception_handler(RequestValidationError)
@@ -978,15 +1224,100 @@ async def _incomplete_source(_request: Request, exc: IncompleteSourceError) -> J
 
 @app.exception_handler(Exception)
 async def _unexpected(_request: Request, exc: Exception) -> JSONResponse:
-    # Registered so even a bug answers in the one shape; a client's error
-    # handling does not have to know which failure it met.
-    return _error(500, "internal_error", f"{type(exc).__name__}: {exc}")
+    """A bug answers like any other refusal, and says nothing about itself.
+
+    Registered so a client's error handling needs one branch. What changed with
+    T-8.OBS.01 (finding 2 of the 2026-10-10 audit): the body used to carry
+    ``f"{type(exc).__name__}: {exc}"``, which is the exception's class and message —
+    a table name, a column, a path, whatever the failure happened to say — handed to
+    whoever asked. The detail now goes to the **log** (with the traceback), and the caller
+    gets the correlation id (`X-Request-Id`, echoed by the middleware) to quote in a
+    report. `tests/check_error_hygiene.py` drives a forced failure and requires that no
+    exception class, message, path or SQL appears in the body.
+    """
+    request_id = observability.REQUEST_ID.get() or "-"
+    logging.getLogger("erp").error(
+        "unhandled exception: %s", type(exc).__name__, exc_info=exc, extra={"erp_request_id": request_id}
+    )
+    observability.METRICS.inc("erp_errors_total", {"kind": "unhandled"})
+    return JSONResponse(
+        status_code=500,
+        content={
+            "error": {
+                "code": "internal_error",
+                "message": (
+                    "the request could not be completed; it has been logged under the"
+                    " correlation id in the X-Request-Id header"
+                ),
+                "details": [{"request_id": request_id}],
+            }
+        },
+        headers={observability.REQUEST_ID_HEADER: request_id},
+    )
 
 
 @app.get(f"{BASE}/health", response_model=HealthOut, tags=["platform"])
 def health() -> HealthOut:
-    """Liveness, and the contract version this instance publishes."""
+    """Liveness: the process is up and serving — nothing about its dependencies.
+
+    A liveness probe must not fail for a reason a restart cannot fix, so this touches no
+    database and answers as long as the process runs. Readiness is the other half of
+    T-8.OBS.01's split (`/api/v1/ready`), and it is the one a load balancer should ask
+    before sending traffic.
+    """
     return HealthOut(status="ok", version=API_VERSION)
+
+
+@app.get(
+    f"{BASE}/ready",
+    response_model=ReadinessOut,
+    responses={
+        200: {"model": ReadinessOut, "description": "the instance can serve"},
+        503: {"model": ReadinessOut, "description": "the instance cannot serve yet"},
+    },
+    tags=["platform"],
+)
+def ready() -> Response:
+    """Readiness: the database answers and the schema is at the revision this build expects.
+
+    Answers `503` (not `500`) when it is not ready, because "not ready yet" is a state a
+    deployment moves out of, and a load balancer needs the distinction. The body names what
+    is not ready and never why — the exception is in the log, and this route is public
+    (T-8.OBS.01, `SECURITY-REVIEW.md`'s access matrix).
+    """
+    ok, checks = observability.readiness(_readiness_engine())
+    observability.METRICS.set(observability.READY, 1.0 if ok else 0.0)
+    payload = ReadinessOut(
+        status="ok" if ok else "unavailable",
+        version=API_VERSION,
+        checks=[ReadinessCheckOut(**check) for check in checks],
+    )
+    return JSONResponse(status_code=200 if ok else 503, content=payload.model_dump(mode="json"))
+
+
+@app.get(
+    f"{BASE}/metrics",
+    response_class=PlainTextResponse,
+    responses={200: {"content": {"text/plain": {}}, "description": "Prometheus text format"}},
+    tags=["platform"],
+)
+def metrics() -> Response:
+    """The counters this process reports, in Prometheus' text exposition format.
+
+    `metrics_enabled=false` answers `404` rather than serving an empty document: a scrape
+    that is switched off should look switched off, and a `404` is what an operator's scrape
+    config will report as a failure to collect. The registry is this process's own
+    (`app/observability.py` states the ceiling): no cross-process aggregation, so a scrape
+    reads the web container's numbers and the worker's separately.
+    """
+    if not config.SETTINGS.metrics_enabled:
+        return _error(404, "not_found", "metrics are disabled on this instance")
+    observability.METRICS.set(
+        observability.BUILD_INFO, 1.0, {"version": API_VERSION}
+    )
+    return PlainTextResponse(
+        observability.METRICS.render(), media_type="text/plain; version=0.0.4; charset=utf-8"
+    )
 
 
 @app.get(f"{BASE}/companies/current", response_model=CompanyOut, tags=["platform"])
@@ -1003,15 +1334,7 @@ def current_company(context: Context) -> CompanyOut:
     company = context.session.get(Company, context.company_id)
     if company is None:
         raise ApiError(404, "company_not_found", f"no company {context.company_id}")
-    return CompanyOut(
-        id=str(company.id),
-        code=company.code,
-        name=company.name,
-        base_currency=company.base_currency,
-        fiscal_year_start_month=company.fiscal_year_start_month,
-        credit_check_mode=company.credit_check_mode,
-        cash_drawer_required=company.cash_drawer_required,
-    )
+    return _company_out(company)
 
 
 @app.post(f"{BASE}/reports", response_model=ReportOut, status_code=201, tags=["reporting"])
@@ -2747,15 +3070,7 @@ def set_company_credit_check_mode(
     if company is None:
         raise ApiError(404, "company_not_found", f"no company {context.company_id}")
     set_credit_check_mode(session, company, mode=payload.mode)
-    response = CompanyOut(
-        id=str(company.id),
-        code=company.code,
-        name=company.name,
-        base_currency=company.base_currency,
-        fiscal_year_start_month=company.fiscal_year_start_month,
-        credit_check_mode=company.credit_check_mode,
-        cash_drawer_required=company.cash_drawer_required,
-    )
+    response = _company_out(company)
     session.commit()
     return response
 
@@ -3660,13 +3975,7 @@ def set_pos_cash_drawer_policy(
     if company is None:
         raise ApiError(404, "company_not_found", f"no company {context.company_id}")
     set_cash_drawer_required(session, company, required=payload.required)
-    response = CompanyOut(
-        id=str(company.id), code=company.code, name=company.name,
-        base_currency=company.base_currency,
-        fiscal_year_start_month=company.fiscal_year_start_month,
-        credit_check_mode=company.credit_check_mode,
-        cash_drawer_required=company.cash_drawer_required,
-    )
+    response = _company_out(company)
     session.commit()
     return response
 
@@ -4111,3 +4420,684 @@ def _jsonable(value: Any) -> Any:
     if isinstance(value, (uuid.UUID, date, datetime)):
         return str(value)
     return value
+
+
+# --- T-7.AUTH.04 — the session flow ------------------------------------------
+
+
+class SessionOut(BaseModel):
+    """Who the caller is and what the shell may show them.
+
+    Deliberately carries no company *id* the caller could reuse: the session is the
+    only thing that names the company (T-7.AUTH.02), so a shell that wants to say
+    "Acme Trading" reads the code, and one that wants another company switches.
+    """
+
+    login: str
+    display_name: str | None = None
+    email: str | None = None
+    company: str
+    companies: list[str]
+    capabilities: list[str]
+    must_change_password: bool
+    mfa_pending: bool
+
+
+class SignInIn(BaseModel):
+    """What a person types. `company` is only needed when they work in several."""
+
+    login: str
+    password: str
+    company: str | None = None
+
+
+class CompanySwitchIn(BaseModel):
+    company: str
+
+
+class PasswordChangeIn(BaseModel):
+    current_password: str
+    new_password: str
+
+
+class MfaCodeIn(BaseModel):
+    code: str
+
+
+class MfaEnrolmentOut(BaseModel):
+    """The secret, its otpauth URL, and the recovery codes — shown once, never again."""
+
+    secret: str
+    otpauth_url: str
+    recovery_codes: list[str] | None = None
+
+
+def _client_address(request: Request) -> str | None:
+    """Where the request came from, for the session's own record.
+
+    The forwarded address is read first because behind the reverse proxy of
+    T-9.EDGE.01 every request arrives from the proxy.
+    """
+    forwarded = request.headers.get("x-forwarded-for", "")
+    if forwarded:
+        return forwarded.split(",")[0].strip()[:64]
+    return request.client.host if request.client is not None else None
+
+
+def _session_out(session: Session, state: identity.SignIn) -> SessionOut:
+    """A session as the shell reads it: who, where, and what they may do here."""
+    scope_to_company(session, state.company.id)
+    return SessionOut(
+        login=state.subject,
+        display_name=state.user.display_name,
+        email=state.user.email,
+        company=state.company.code,
+        companies=[company.code for company in identity.memberships_for(session, state.user)],
+        capabilities=sorted(
+            capabilities_held(
+                session, company_id=state.company.id, subject=state.subject
+            )
+        ),
+        must_change_password=bool(state.user.must_change_password),
+        mfa_pending=state.mfa_pending,
+    )
+
+
+@app.post(f"{BASE}/auth/login", response_model=SessionOut, tags=["identity"])
+def sign_in(payload: SignInIn, request: Request, response: Response) -> SessionOut:
+    """Sign in and receive the session cookie.
+
+    Public by necessity — there is no session to check yet — and the one route that
+    mints one. Every refusal is the same answer with the same wording, so a caller
+    cannot enumerate logins, and the credential's failure count is written even
+    though the request is refused (app/identity.py).
+    """
+    with Session(_engine()) as session:
+        state = identity.sign_in(
+            session,
+            login=payload.login,
+            password=payload.password,
+            company_code=payload.company,
+            user_agent=(request.headers.get("user-agent") or "")[:256] or None,
+            address=_client_address(request),
+        )
+        session.commit()
+        answer = _session_out(session, state)
+    auth.set_session_cookie(response, state.token, over_https=_over_https(request))
+    return answer
+
+
+@app.get(f"{BASE}/auth/session", response_model=SessionOut, tags=["identity"])
+def read_session(context: Context) -> SessionOut:
+    """Who this cookie is, for a shell that has one and wants to know what it may do."""
+    return _session_out(context.session, _resolved(context))
+
+
+@app.post(f"{BASE}/auth/logout", status_code=204, tags=["identity"])
+def sign_out(context: Context, request: Request, response: Response) -> Response:
+    """Sign out: the row is revoked, so the token is dead even if the cookie is copied."""
+    identity.revoke_session(context.session, context.session_token or "")
+    context.session.commit()
+    auth.clear_session_cookie(response, over_https=_over_https(request))
+    response.status_code = 204
+    return response
+
+
+@app.post(f"{BASE}/auth/password", status_code=204, tags=["identity"])
+def change_password(
+    payload: PasswordChangeIn, context: Context, response: Response
+) -> Response:
+    """Change your own password. The current one is required, and the rest are revoked.
+
+    Revoking the other sessions is the point of a password change: if the password was
+    changed *because* somebody else had it, leaving their sessions live would leave the
+    problem in place. This session survives, so the person is not signed out of the
+    screen they just used.
+    """
+    session = context.session
+    user = identity.user_by_login(session, context.actor)
+    if user is None or not identity.verify_password(session, user, payload.current_password):
+        raise ApiError(401, "unauthenticated", "the current password is not right")
+    identity.set_password(session, user, payload.new_password)
+    for row in identity.sessions_for(session, user=user):
+        if str(row.id) != str(_resolved(context).session_row.id) and row.revoked_at is None:
+            row.revoked_at = datetime.now(timezone.utc)
+    session.commit()
+    response.status_code = 204
+    return response
+
+
+@app.post(f"{BASE}/auth/company", response_model=SessionOut, tags=["identity"])
+def switch_company(payload: CompanySwitchIn, context: Context) -> SessionOut:
+    """Move this session to another company the person belongs to.
+
+    The membership is what permits it, never a header or a payload field: a caller
+    cannot reach a company they are not a member of, which is the hole the old
+    ``X-Company-Id`` header left open (finding 2 of the 2026-10-10 audit).
+    """
+    session = context.session
+    state = identity.switch_company(session, _resolved(context), payload.company)
+    session.commit()
+    return _session_out(session, state)
+
+
+@app.post(f"{BASE}/auth/mfa/enrol", response_model=MfaEnrolmentOut, tags=["identity"])
+def enrol_second_factor(context: PendingContext) -> MfaEnrolmentOut:
+    """Issue a second factor. It is not demanded until a code confirms it.
+
+    Reachable with a session that already owes a factor, so a person can replace a lost
+    authenticator without an administrator — and reachable before one is owed, because
+    holding an `mfa_required_roles` role requires having enrolled one (the assignment
+    route refuses otherwise).
+    """
+    user = identity.user_by_login(context.session, context.actor)
+    if user is None:
+        raise ApiError(401, "unauthenticated", "no such user")
+    secret = identity.enrol_totp(context.session, user)
+    context.session.commit()
+    return MfaEnrolmentOut(
+        secret=secret,
+        otpauth_url=(
+            f"otpauth://totp/{quote(context.actor)}?secret={secret}"
+            f"&issuer={quote('ERP')}&digits={identity.TOTP_DIGITS}"
+            f"&period={identity.TOTP_STEP_SECONDS}"
+        ),
+    )
+
+
+@app.post(f"{BASE}/auth/mfa/confirm", response_model=MfaEnrolmentOut, tags=["identity"])
+def confirm_second_factor(payload: MfaCodeIn, context: PendingContext) -> MfaEnrolmentOut:
+    """Confirm enrolment with a live code, and receive the recovery codes once."""
+    user = identity.user_by_login(context.session, context.actor)
+    if user is None:
+        raise ApiError(401, "unauthenticated", "no such user")
+    codes = identity.confirm_totp(context.session, user, payload.code)
+    context.session.commit()
+    return MfaEnrolmentOut(secret="", otpauth_url="", recovery_codes=codes)
+
+
+@app.post(f"{BASE}/auth/mfa/verify", response_model=SessionOut, tags=["identity"])
+def verify_second_factor(payload: MfaCodeIn, context: PendingContext) -> SessionOut:
+    """Finish a sign-in that owed a second factor."""
+    session = context.session
+    resolved = _resolved(context)
+    if not resolved.mfa_pending:
+        raise ApiError(409, "mfa_not_pending", "this session does not owe a second factor")
+    state = identity.confirm_session_mfa(session, resolved, payload.code)
+    session.commit()
+    return _session_out(session, state)
+
+
+# --- T-7.ADMIN.01 … T-7.ADMIN.03 — administration -----------------------------
+
+
+class UserIn(BaseModel):
+    login: str
+    password: str | None = None
+    email: str | None = None
+    display_name: str | None = None
+
+
+class UserOut(BaseModel):
+    login: str
+    email: str | None
+    display_name: str | None
+    status: str
+    has_password: bool
+    companies: list[str]
+    roles: list[str]
+    mfa_enrolled: bool
+
+
+class UserPageOut(BaseModel):
+    items: list[UserOut]
+    limit: int
+    offset: int
+    total: int
+
+
+class UserStatusIn(BaseModel):
+    status: str
+
+
+class PasswordSetIn(BaseModel):
+    password: str
+    # Optional **and nullable**, which is this contract's convention for "not stated"
+    # (`tests/check_api_conventions.py` holds every documented optional field to it):
+    # null and false mean the same thing here — the person is not made to change it.
+    must_change: bool | None = None
+
+
+class RoleIn(BaseModel):
+    code: str
+    name: str
+
+
+class RoleOut(BaseModel):
+    code: str
+    name: str
+    capabilities: list[str]
+
+
+class RolePageOut(BaseModel):
+    items: list[RoleOut]
+    limit: int
+    offset: int
+    total: int
+
+
+class GrantIn(BaseModel):
+    capabilities: list[str]
+
+
+class RestrictionIn(BaseModel):
+    """One field of one entity, for one role. Both flags are optional and nullable:
+    null means "not stated", and the two are independent — a field may be writable and
+    unreadable, which is what a write-only column (a password, a bank account) is."""
+
+    entity: str
+    field: str
+    can_read: bool | None = None
+    can_write: bool | None = None
+
+
+class AssignmentIn(BaseModel):
+    subject: str
+    role: str
+
+
+class CompanyIn(BaseModel):
+    """A tenant, as it is created. The market decides what it starts with."""
+
+    code: str
+    name: str
+    market: str
+    fiscal_year_start_month: int | None = None
+    base_currency: str | None = None
+
+
+class CompanyStatusIn(BaseModel):
+    status: str
+
+
+def _member_of(session: Session, *, login: str, company_id: uuid.UUID) -> identity.AppUser:
+    """The user, if they are a member of this company — otherwise 404.
+
+    Administering somebody who does not work here answers "no such user" rather than
+    naming them: a company's administrator has no business learning another tenant's
+    logins, and identity rows are installation-level (app/identity.py), so the
+    membership check is the isolation.
+    """
+    user = identity.user_by_login(session, login)
+    if user is None:
+        raise ApiError(404, "unknown_user", f"no user {login!r} works in this company")
+    member = any(
+        str(company.id) == str(company_id)
+        for company in identity.memberships_for(session, user)
+    )
+    if not member:
+        raise ApiError(404, "unknown_user", f"no user {login!r} works in this company")
+    return user
+
+
+def _user_out(session: Session, *, user: identity.AppUser, company_id: uuid.UUID) -> UserOut:
+    entry = session.get(identity.UserTotp, user.id)
+    return UserOut(
+        login=user.login,
+        email=user.email,
+        display_name=user.display_name,
+        status=user.status,
+        has_password=user.password_hash is not None,
+        companies=[company.code for company in identity.memberships_for(session, user)],
+        roles=[
+            role.code
+            for role in roles_for(session, company_id=company_id, subject=user.login)
+        ],
+        mfa_enrolled=bool(entry is not None and entry.confirmed_at is not None),
+    )
+
+
+@app.get(f"{BASE}/admin/users", response_model=UserPageOut, tags=["administration"])
+def list_users(
+    context: Context,
+    limit: Annotated[int, Query(ge=1, le=MAX_LIMIT)] = DEFAULT_LIMIT,
+    offset: Annotated[int, Query(ge=0)] = 0,
+) -> UserPageOut:
+    """The people who may work in this company. Only this company's — never others'."""
+    session = context.session
+    require(
+        session,
+        company_id=context.company_id,
+        subject=context.actor,
+        capability="admin.users",
+        entity="app_user",
+    )
+    everyone = [
+        user
+        for user in session.scalars(
+            select(identity.AppUser)
+            .join(
+                identity.UserMembership,
+                identity.UserMembership.user_id == identity.AppUser.id,
+            )
+            .where(identity.UserMembership.member_company_id == context.company_id)
+            .order_by(identity.AppUser.login)
+        )
+    ]
+    window = everyone[offset : offset + limit]
+    return UserPageOut(
+        items=[_user_out(session, user=user, company_id=context.company_id) for user in window],
+        limit=limit,
+        offset=offset,
+        total=len(everyone),
+    )
+
+
+@app.post(f"{BASE}/admin/users", response_model=UserOut, status_code=201, tags=["administration"])
+def create_user_route(payload: UserIn, context: Context) -> UserOut:
+    """Add a person to this company, with a password they can sign in with.
+
+    Creating the *identity* is installation-level, but creating it through this route
+    always makes a member of the acting company: there is no way to make a user who
+    belongs nowhere, which would be an account nothing could reach or administer.
+    """
+    session = context.session
+    require(
+        session,
+        company_id=context.company_id,
+        subject=context.actor,
+        capability="admin.users",
+        entity="app_user",
+    )
+    user = identity.create_user(
+        session,
+        login=payload.login,
+        password=payload.password,
+        email=payload.email,
+        display_name=payload.display_name,
+        companies=[context.company_id],
+    )
+    session.commit()
+    return _user_out(session, user=user, company_id=context.company_id)
+
+
+@app.post(
+    f"{BASE}/admin/users/{{login}}/password", response_model=UserOut, tags=["administration"]
+)
+def set_user_password(
+    login: str, payload: PasswordSetIn, context: Context
+) -> UserOut:
+    """Set somebody's password. Their live sessions are revoked by it."""
+    session = context.session
+    require(
+        session,
+        company_id=context.company_id,
+        subject=context.actor,
+        capability="admin.users",
+        entity="app_user",
+    )
+    user = _member_of(session, login=login, company_id=context.company_id)
+    identity.set_password(
+        session, user, payload.password, must_change=bool(payload.must_change)
+    )
+    identity.revoke_sessions(session, user=user)
+    session.commit()
+    return _user_out(session, user=user, company_id=context.company_id)
+
+
+@app.post(
+    f"{BASE}/admin/users/{{login}}/status", response_model=UserOut, tags=["administration"]
+)
+def set_user_status(login: str, payload: UserStatusIn, context: Context) -> UserOut:
+    """Disable or re-enable somebody. Disabling revokes every session they hold."""
+    session = context.session
+    require(
+        session,
+        company_id=context.company_id,
+        subject=context.actor,
+        capability="admin.users",
+        entity="app_user",
+    )
+    user = _member_of(session, login=login, company_id=context.company_id)
+    identity.set_status(session, user, payload.status)
+    session.commit()
+    return _user_out(session, user=user, company_id=context.company_id)
+
+
+@app.get(f"{BASE}/admin/roles", response_model=RolePageOut, tags=["administration"])
+def list_roles(
+    context: Context,
+    limit: Annotated[int, Query(ge=1, le=MAX_LIMIT)] = DEFAULT_LIMIT,
+    offset: Annotated[int, Query(ge=0)] = 0,
+) -> RolePageOut:
+    """This company's roles and what each holds."""
+    session = context.session
+    require(
+        session,
+        company_id=context.company_id,
+        subject=context.actor,
+        capability="admin.roles",
+        entity="role",
+    )
+    everyone = list(
+        session.scalars(
+            select(Role).where(Role.company_id == context.company_id).order_by(Role.code)
+        )
+    )
+    window = everyone[offset : offset + limit]
+    return RolePageOut(
+        items=[
+            RoleOut(
+                code=role.code,
+                name=role.name,
+                capabilities=sorted(
+                    permission.capability for permission in role.permissions
+                ),
+            )
+            for role in window
+        ],
+        limit=limit,
+        offset=offset,
+        total=len(everyone),
+    )
+
+
+@app.post(f"{BASE}/admin/roles", response_model=RoleOut, status_code=201, tags=["administration"])
+def create_role(payload: RoleIn, context: Context) -> RoleOut:
+    """Define a role. It holds nothing until something is granted to it."""
+    session = context.session
+    require(
+        session,
+        company_id=context.company_id,
+        subject=context.actor,
+        capability="admin.roles",
+        entity="role",
+    )
+    role = define_role(
+        session, company_id=context.company_id, code=payload.code, name=payload.name
+    )
+    session.commit()
+    return RoleOut(code=role.code, name=role.name, capabilities=[])
+
+
+def _role_in_company(session: Session, *, code: str, company_id: uuid.UUID) -> Role:
+    """This company's role with that code, or 404."""
+    role = session.scalars(
+        select(Role).where(Role.company_id == company_id, Role.code == code)
+    ).one_or_none()
+    if role is None:
+        raise ApiError(404, "unknown_role", f"no role {code!r} in this company")
+    return role
+
+
+@app.post(
+    f"{BASE}/admin/roles/{{code}}/grants", response_model=RoleOut, tags=["administration"]
+)
+def grant_capabilities(code: str, payload: GrantIn, context: Context) -> RoleOut:
+    """Give a role capabilities. This is the only way anything is ever allowed."""
+    session = context.session
+    require(
+        session,
+        company_id=context.company_id,
+        subject=context.actor,
+        capability="admin.roles",
+        entity="role",
+    )
+    role = _role_in_company(session, code=code, company_id=context.company_id)
+    grant(session, role, *payload.capabilities)
+    session.commit()
+    return RoleOut(
+        code=role.code,
+        name=role.name,
+        capabilities=sorted(permission.capability for permission in role.permissions),
+    )
+
+
+@app.post(
+    f"{BASE}/admin/roles/{{code}}/restrictions",
+    response_model=RoleOut,
+    status_code=201,
+    tags=["administration"],
+)
+def restrict_field(code: str, payload: RestrictionIn, context: Context) -> RoleOut:
+    """Restrict one field of one entity for a role — the field-level half of RBAC."""
+    session = context.session
+    require(
+        session,
+        company_id=context.company_id,
+        subject=context.actor,
+        capability="admin.roles",
+        entity="role",
+    )
+    role = _role_in_company(session, code=code, company_id=context.company_id)
+    restrict(
+        session,
+        role,
+        entity=payload.entity,
+        field=payload.field,
+        can_read=payload.can_read if payload.can_read is not None else True,
+        can_write=payload.can_write if payload.can_write is not None else False,
+    )
+    session.commit()
+    return RoleOut(
+        code=role.code,
+        name=role.name,
+        capabilities=sorted(permission.capability for permission in role.permissions),
+    )
+
+
+@app.post(
+    f"{BASE}/admin/assignments", response_model=UserOut, status_code=201, tags=["administration"]
+)
+def assign_role_route(payload: AssignmentIn, context: Context) -> UserOut:
+    """Give a member one of this company's roles. Takes effect on their next request.
+
+    Two refusals worth stating: the subject must be a **member** of this company, and a
+    role the `mfa_required_roles` variable names cannot be assigned to somebody without a
+    confirmed second factor — which is how "MFA is enforced for the administrator role"
+    is true without a sign-in that could lock an install out of itself.
+    """
+    session = context.session
+    require(
+        session,
+        company_id=context.company_id,
+        subject=context.actor,
+        capability="admin.roles",
+        entity="role",
+    )
+    user = _member_of(session, login=payload.subject, company_id=context.company_id)
+    role = _role_in_company(session, code=payload.role, company_id=context.company_id)
+    if identity.mfa_required_for_role(role.code):
+        entry = session.get(identity.UserTotp, user.id)
+        if entry is None or entry.confirmed_at is None:
+            raise ApiError(
+                422,
+                "second_factor_required",
+                f"role {role.code!r} requires a confirmed second factor;"
+                f" {user.login!r} has not enrolled one",
+            )
+    assign_role(
+        session, company_id=context.company_id, subject=user.login, role=role
+    )
+    session.commit()
+    return _user_out(session, user=user, company_id=context.company_id)
+
+
+@app.post(f"{BASE}/companies", response_model=CompanyOut, status_code=201, tags=["platform"])
+def create_company_route(payload: CompanyIn, context: Context) -> CompanyOut:
+    """Provision a tenant: the company, its chart of accounts, and its first administrator.
+
+    The creator is made a member of the company they created and given its administrator
+    role, because a tenant nobody can administer is not provisioned — it is stranded.
+    Both writes are company-scoped, so the trail files them under the new company.
+
+    # ponytail: no platform-level administrator. Every administration route is
+    # scoped to the actor's own company, so this is how a tenant is created: by
+    # somebody who already holds `company.configure` somewhere. Ceiling: an
+    # operator with no company cannot create the first one — the install command is
+    # still the only way in, which is the bootstrap module's job. Upgrade path: a
+    # platform principal, when something asks for one.
+    """
+    session = context.session
+    require(
+        session,
+        company_id=context.company_id,
+        subject=context.actor,
+        capability="company.configure",
+        entity="company",
+    )
+    company = installer(
+        session,
+        code=payload.code,
+        name=payload.name,
+        market=payload.market,
+        fiscal_year_start_month=payload.fiscal_year_start_month,
+        base_currency=payload.base_currency,
+    )
+    creator = identity.user_by_login(session, context.actor)
+    if creator is not None:
+        identity.add_membership(session, user=creator, company_id=company.id)
+        role = define_role(
+            session,
+            company_id=company.id,
+            code=ADMINISTRATOR_ROLE[0],
+            name=ADMINISTRATOR_ROLE[1],
+        )
+        grant(session, role, *declared_capabilities())
+        assign_role(
+            session, company_id=company.id, subject=context.actor, role=role
+        )
+    session.commit()
+    return _company_out(company)
+
+
+@app.post(
+    f"{BASE}/companies/{{code}}/status", response_model=CompanyOut, tags=["platform"]
+)
+def set_company_status_route(
+    code: str, payload: CompanyStatusIn, context: SuspendedContext
+) -> CompanyOut:
+    """Suspend or reinstate a company. Nothing it owns is touched.
+
+    A suspended company keeps every row — the ledger stays whole — and refuses
+    sign-ins and every request except this one, which is why this route is reachable
+    for a suspended company and nothing else is (app/auth.py `allow_suspended`). It
+    still asks for `company.configure`, so lifting the suspension is as hard as
+    suspending.
+    """
+    session = context.session
+    require(
+        session,
+        company_id=context.company_id,
+        subject=context.actor,
+        capability="company.configure",
+        entity="company",
+    )
+    target = session.scalars(
+        select(Company).where(Company.code == code, Company.deleted_at.is_(None))
+    ).one_or_none()
+    if target is None:
+        raise ApiError(404, "unknown_company", f"no company {code!r}")
+    set_company_status(session, target, status=payload.status)
+    session.commit()
+    return _company_out(target)

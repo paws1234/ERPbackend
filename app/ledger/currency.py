@@ -30,7 +30,6 @@ schedule.
 
 from __future__ import annotations
 
-import os
 import uuid
 from collections.abc import Callable
 from datetime import date, datetime, timezone
@@ -49,14 +48,16 @@ from sqlalchemy import (
 from sqlalchemy.orm import Mapped, Session, mapped_column
 
 from app.audit import SoftDeleteMixin, deny_hard_delete
+from app.config import FX_RATE_SOURCE, SETTINGS, Settings
 from app.db import Base
 
 # The scale rates are stored and applied at — finer than money, because a rate is
 # a multiplier rather than an amount.
 RATE = Numeric(20, 10)
 
-# The environment variable naming the configured rate source (`fx_rate_source`).
-RATE_SOURCE_SETTING = "FX_RATE_SOURCE"
+# The variable naming the configured rate source (`fx_rate_source`) — declared, with every
+# other setting, in `app/config.py` (T-8.CFG.01), which reads it once at start.
+RATE_SOURCE_SETTING = FX_RATE_SOURCE
 
 
 class CurrencyError(ValueError):
@@ -308,9 +309,13 @@ def register_rate_source(
     _rate_sources[str(name)] = fetch
 
 
-def configured_source() -> str | None:
-    """The provider this deployment is configured to use (`fx_rate_source`)."""
-    return os.environ.get(RATE_SOURCE_SETTING) or None
+def configured_source(settings: Settings | None = None) -> str | None:
+    """The provider this deployment is configured to use (`fx_rate_source`).
+
+    Read from the configuration, which read the environment once at start (T-8.CFG.01): a value
+    that could change under a running process is a value two parts of it can disagree about.
+    """
+    return (settings or SETTINGS).fx_rate_source
 
 
 def sync_daily_rates(
@@ -321,6 +326,7 @@ def sync_daily_rates(
     currencies: list[str],
     on: date | None = None,
     source: str | None = None,
+    settings: Settings | None = None,
 ) -> list[FxRate]:
     """Pull one day's rates for `currencies` and store them — all of them or none.
 
@@ -330,7 +336,7 @@ def sync_daily_rates(
     against it, so the sync is all-or-nothing and reports why.
     """
     day = on or datetime.now(timezone.utc).date()
-    name = source or configured_source()
+    name = source or configured_source(settings)
     if name is None:
         raise FxSyncFailed(
             f"no rate source is configured ({RATE_SOURCE_SETTING} is unset);"

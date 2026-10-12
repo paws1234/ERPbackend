@@ -14,9 +14,11 @@ kept in one place:
   written before the send is attempted and kept whatever happens to the caller's
   transaction — a send that failed is visible, not silent
   (:func:`send_outbound`).
-* **Credentials are configuration.** Endpoint URLs and tokens come from the
-  environment (:func:`endpoint_for`); nothing secret is written in the code, and
-  a token is never copied into the delivery log.
+* **Credentials are configuration.** Endpoint URLs and tokens come from
+  `INTEGRATION_ENDPOINTS`, declared with every other setting in `app/config.py`
+  and read there once at start (T-8.CFG.01) — never from a default, never
+  written in the code, and never copied into the delivery log
+  (:func:`endpoint_for`).
 * **A consumer cannot bypass the boundary.** A phase that needs a gateway
   registers its transport (:func:`register_transport`) and sends through
   :func:`send_outbound`; the transports themselves are private, so there is no
@@ -29,8 +31,6 @@ dunning) — this module owns only the boundary they all meet.
 
 from __future__ import annotations
 
-import json
-import os
 import uuid
 from collections.abc import Callable
 from datetime import datetime
@@ -51,13 +51,15 @@ from sqlalchemy import (
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, Session, mapped_column
 
+from app.config import INTEGRATION_ENDPOINTS, SETTINGS, Settings
 from app.db import Base, scope_to_company
 
-# The environment variable holding every endpoint and its credentials, as JSON:
+# The setting holding every endpoint and its credentials, as JSON:
 #   {"email": {"url": "...", "token": "..."}, "gateway": {...}}
 # One variable rather than one per channel, so a deployment states its boundary
-# settings in one place and a new channel needs no code.
-ENDPOINTS_SETTING = "INTEGRATION_ENDPOINTS"
+# settings in one place and a new channel needs no code. Read once, at start, by
+# `app/config.py` — which is also where a value that is not valid JSON is refused.
+ENDPOINTS_SETTING = INTEGRATION_ENDPOINTS
 
 # Delivery states, as the log reports them.
 SENDING, SENT, FAILED = "sending", "sent", "failed"
@@ -145,18 +147,19 @@ def register_transport(channel: str, transport: Callable[[str, dict], Any]) -> N
     _transports[channel] = transport
 
 
-def endpoint_for(channel: str) -> dict:
-    """The configured endpoint and credentials for a channel, from the environment."""
-    raw = os.environ.get(ENDPOINTS_SETTING)
-    if not raw:
+def endpoint_for(channel: str, *, settings: Settings | None = None) -> dict:
+    """The configured endpoint and credentials for a channel, from the configuration.
+
+    The configuration read the environment once at start (T-8.CFG.01) and refused a value it
+    could not parse, so a malformed `INTEGRATION_ENDPOINTS` is a deployment that does not start
+    rather than a send that fails later.
+    """
+    configured = (settings or SETTINGS).integration_endpoints
+    if not configured:
         raise UnconfiguredChannel(
             f"{ENDPOINTS_SETTING} is not set; the integration boundary has no"
             f" endpoints configured (needed for {channel!r})"
         )
-    try:
-        configured = json.loads(raw)
-    except json.JSONDecodeError as exc:
-        raise UnconfiguredChannel(f"{ENDPOINTS_SETTING} is not valid JSON: {exc}") from exc
     try:
         return configured[channel]
     except KeyError as exc:
@@ -217,6 +220,8 @@ def send_outbound(
     destination: str,
     payload: dict,
     max_attempts: int = DEFAULT_ATTEMPTS,
+    delivery: OutboundDelivery | None = None,
+    on_attempt: Callable[[int, str, str | None], Any] | None = None,
 ) -> OutboundDelivery:
     """Deliver one message, retrying a failure and logging every attempt.
 
@@ -224,27 +229,44 @@ def send_outbound(
     a send that failed — or that died mid-flight — is visible in the delivery log
     rather than lost with the caller's transaction. The channel's credentials are
     not part of the row.
+
+    Two optional arguments let the phase that owns a channel's *retry policy* keep
+    it there without leaving this boundary (T-8.DELIVERY.01):
+
+    * ``delivery`` — an existing log row to continue rather than a new one, so a
+      retry appends to the delivery it is retrying instead of creating a second
+      message. Numbering continues from the row's own attempt count.
+    * ``on_attempt`` — called after every attempt with ``(delivery, attempt, status, error)``,
+      so a consumer that needs a row per attempt can write one from inside the boundary.
+      Never called before the log row exists; the boundary's own rule ("a send that failed
+      is visible") is what makes the row exist first.
     """
     transport = _transports.get(channel)
     if transport is None:
         raise UnconfiguredChannel(f"no transport is registered for {channel!r}")
 
-    delivery = OutboundDelivery(
-        company_id=company_id,
-        channel=channel,
-        destination=str(destination),
-        payload=payload,
-        status=SENDING,
-        attempts=0,
-    )
-    session.add(delivery)
+    if delivery is None:
+        delivery = OutboundDelivery(
+            company_id=company_id,
+            channel=channel,
+            destination=str(destination),
+            payload=payload,
+            status=SENDING,
+            attempts=0,
+        )
+        session.add(delivery)
+    else:
+        delivery.status = SENDING
+        delivery.destination = str(destination)
+        delivery.payload = payload
     session.commit()
     # The company binding is transaction-scoped (app.db), and this function
     # commits: state it again so the attempts and the outcome land on the row.
     scope_to_company(session, company_id)
 
+    start = delivery.attempts
     for attempt in range(1, max_attempts + 1):
-        delivery.attempts = attempt
+        delivery.attempts = start + attempt
         try:
             transport(destination, payload)
         except Exception as exc:  # a boundary: whatever the transport raised
@@ -255,6 +277,8 @@ def send_outbound(
             delivery.status = SENT
         session.commit()
         scope_to_company(session, company_id)
+        if on_attempt is not None:
+            on_attempt(delivery, delivery.attempts, delivery.status, delivery.last_error)
         if delivery.status == SENT:
             return delivery
 

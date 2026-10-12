@@ -1,4 +1,11 @@
-# T-0.DEPLOY.03 — the stack: database, backend and frontend as three containers.
+# T-0.DEPLOY.03 — the stack: database, backend, worker and frontend as four containers.
+#
+# T-8.WORK.01 added the fourth: the **worker**, the same image as the backend with a
+# different command (`python -m app.worker`), which runs the scheduled work — the session
+# purge and the outbound-delivery retry (`app/schedule.py`) — on `pgqueuer`, Postgres-backed
+# with no Redis. It is a separate service because background work must survive a redeploy of
+# the web process, and because a job that ran inside a request would make a job's failure a
+# `500`. It sits on the `data` network alone: it reaches the database, and nothing reaches it.
 #
 #   POSTGRES_PASSWORD=... docker compose up -d
 #
@@ -19,7 +26,9 @@
 #
 # The applications are consumed as **images** (`BACKEND_IMAGE` / `FRONTEND_IMAGE`
 # choose which), so bringing the stack up needs neither application repository
-# checked out — only this file. For local builds use the development override:
+# checked out — only this file. The backend image serves two services: the API
+# (`backend`) and the scheduled work (`worker`, a different command). For local
+# builds use the development override:
 #
 #   docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --build
 #
@@ -66,6 +75,31 @@ services:
       interval: 2s
       timeout: 3s
       retries: 30
+
+  worker:
+    image: ${BACKEND_IMAGE:-erpv1-backend:local}
+    # The same image, a different command: one container per service, one build per
+    # application. `--check` is not the entrypoint — it is the health probe below.
+    command: ["python", "-m", "app.worker"]
+    environment:
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-erpv1}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-erpv1}
+      # §9's worker_concurrency, stated here so the deployment's setting is visible.
+      WORKER_CONCURRENCY: ${WORKER_CONCURRENCY:-4}
+    depends_on:
+      # The worker waits for a database that answers, exactly as the backend does.
+      db:
+        condition: service_healthy
+    networks: [data]
+    restart: unless-stopped
+    healthcheck:
+      # Reports the wired jobs and schedules, and fails when the queue's own tables are
+      # missing (the migration environment installs them) — so a worker that would run
+      # nothing is visible rather than merely running.
+      test: ["CMD", "python", "-m", "app.worker", "--check"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
 
   frontend:
     image: ${FRONTEND_IMAGE:-erpv1-frontend:local}

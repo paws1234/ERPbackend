@@ -48,6 +48,8 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from tests.identity import sign_in  # noqa: E402
+
 
 from app.api import BASE, app  # noqa: E402
 from app.company import Company  # noqa: E402
@@ -460,7 +462,7 @@ def main() -> int:
         session.commit()
 
     client = TestClient(app, raise_server_exceptions=False)
-    headers = {"X-Company-Id": str(COMPANY), "X-Actor": "maria"}
+    headers = sign_in(engine, company_id=COMPANY, actor="maria")
 
     # 6 — the API files a rule and asks the engine
     filed = client.post(

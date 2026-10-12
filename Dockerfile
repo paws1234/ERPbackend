@@ -1,7 +1,8 @@
 # T-0.DEPLOY.01 — the backend image.
 #
-# One container, one service: the FastAPI application, its dependencies, nothing
-# else. Configuration is entirely the environment's (DATABASE_URL, and later the
+# One image, one application: the FastAPI application, its dependencies, nothing
+# else. The stack runs it as two services — the API and the worker
+# (`python -m app.worker`) — which is why nothing here is specific to uvicorn. Configuration is entirely the environment's (DATABASE_URL, and later the
 # integration endpoints), so one image runs against any database without a
 # rebuild, and no secret is ever copied into it.
 FROM python:3.12-slim
@@ -22,7 +23,12 @@ WORKDIR /app
 COPY requirements.lock ./
 RUN pip install --no-cache-dir -r requirements.lock
 
+# The application, and the migration tree it installs itself from: `python -m app.bootstrap`
+# runs `alembic upgrade head` (T-8.MIG.01), and the worker's `--check` reads the same tree,
+# so an image without it could not bring up or verify its own database.
 COPY app ./app
+COPY migrations ./migrations
+COPY alembic.ini ./alembic.ini
 
 # A runtime that cannot write to its own tree: the process runs as a plain user,
 # and only the database is outside it.

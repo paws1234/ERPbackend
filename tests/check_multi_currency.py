@@ -37,6 +37,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from app.audit import read_trail, set_actor  # noqa: E402
 from app.company import Company  # noqa: E402
+from app.config import load_settings  # noqa: E402
 from app.db import Base  # noqa: E402
 from app.ledger.currency import (  # noqa: E402
     FxRate,
@@ -257,10 +258,18 @@ def main() -> int:
             "test-feed",
             lambda base, currencies: {code: Decimal("58.10") for code in currencies},
         )
-        os.environ[RATE_SOURCE_SETTING] = "test-feed"
-        assert configured_source() == "test-feed"
+        # The configuration states the source, and it is read once, at start (T-8.CFG.01), so
+        # this check states its own configuration rather than changing the environment under a
+        # process that has already read it.
+        feed = load_settings({**os.environ, RATE_SOURCE_SETTING: "test-feed"})
+        assert configured_source(feed) == "test-feed"
         synced = sync_daily_rates(
-            session, company_id=COMPANY, base_currency="PHP", currencies=["USD", "EUR"], on=TODAY
+            session,
+            company_id=COMPANY,
+            base_currency="PHP",
+            currencies=["USD", "EUR"],
+            on=TODAY,
+            settings=feed,
         )
         session.commit()
         assert sorted(rate.currency for rate in synced) == ["EUR", "USD"], synced
@@ -273,7 +282,7 @@ def main() -> int:
             raise TimeoutError("the feed did not answer")
 
         register_rate_source("broken-feed", broken)
-        os.environ[RATE_SOURCE_SETTING] = "broken-feed"
+        broken_feed = load_settings({**os.environ, RATE_SOURCE_SETTING: "broken-feed"})
         with engine.connect() as connection:
             before = connection.exec_driver_sql("SELECT count(*) FROM fx_rate").scalar()
         failure = _refused(
@@ -283,6 +292,7 @@ def main() -> int:
                 base_currency="PHP",
                 currencies=["USD"],
                 on=date(2026, 9, 18),
+                settings=broken_feed,
             ),
             FxSyncFailed,
         )
@@ -290,10 +300,16 @@ def main() -> int:
         with engine.connect() as connection:
             after = connection.exec_driver_sql("SELECT count(*) FROM fx_rate").scalar()
         assert before == after, f"a failed sync stored {after - before} rows"
-        os.environ.pop(RATE_SOURCE_SETTING, None)
+        unconfigured = load_settings(
+            {name: value for name, value in os.environ.items() if name != RATE_SOURCE_SETTING}
+        )
         unset = _refused(
             lambda: sync_daily_rates(
-                session, company_id=COMPANY, base_currency="PHP", currencies=["USD"]
+                session,
+                company_id=COMPANY,
+                base_currency="PHP",
+                currencies=["USD"],
+                settings=unconfigured,
             ),
             FxSyncFailed,
         )

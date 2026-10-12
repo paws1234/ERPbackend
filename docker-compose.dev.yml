@@ -13,6 +13,13 @@ services:
       context: .
       dockerfile: Dockerfile
 
+  # The same image as the backend, so the same local build serves both.
+  worker:
+    image: erpv1-backend:local
+    build:
+      context: .
+      dockerfile: Dockerfile
+
   frontend:
     image: erpv1-frontend:local
     build:

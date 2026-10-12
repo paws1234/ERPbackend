@@ -7,12 +7,14 @@ The review is only as good as what it can be held to, so this check is its **ver
 each claim the review makes is something this file either runs or reads out of the tree, and it
 fails when a claim stops being true.
 
-Green on all eight:
+Green on all nine:
 
 1. **every route on the app is guarded** — the sweep walks the app's own routes, reads each
    endpoint's own source, and requires a `require(...)` naming a capability; the routes that
-   carry no permission are named in :data:`PUBLIC` with the reason each is public, so a further
-   unguarded route is a failure rather than an omission
+   carry no permission are named in :data:`PUBLIC` with the reason each is public, and the
+   routes that carry none because they *are* the session boundary are named in
+   :data:`SESSION_ONLY` and driven with no session — so a further unguarded route is a failure
+   rather than an omission
 2. **the recorded matrix is the app's matrix** — `SECURITY-REVIEW.md` lists every route with
    the capability guarding it, and this check compares the two: a route added, removed or
    re-guarded without the document is red
@@ -35,7 +37,11 @@ Green on all eight:
    definition's own capability) are called with a subject holding nothing and must be refused,
    and the permitted caller is served: a table of exceptions with no request behind it is a
    place for a real hole to hide
-8. **every finding is recorded with a disposition** — `SECURITY-REVIEW.md`'s findings each state
+8. **the session boundary is driven with nothing** — the routes that carry no capability
+   because they *are* the door (sign in, the session you hold, sign out, your own password,
+   the company switch, the second factor) are named in :data:`SESSION_ONLY` and each is called
+   with no cookie and with a forged one, and must answer `401 unauthenticated`
+9. **every finding is recorded with a disposition** — `SECURITY-REVIEW.md`'s findings each state
    `remediated` or `accepted risk` with the reason, so an open finding is visible and an
    accepted one is a decision somebody wrote down
 
@@ -60,6 +66,8 @@ from sqlalchemy.orm import Session
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
+from tests.identity import sign_in  # noqa: E402
+
 
 from app.ap.invoices import SupplierInvoice  # noqa: E402,F401 — for its table
 from app.api import (  # noqa: E402
@@ -70,6 +78,7 @@ from app.api import (  # noqa: E402
     app,
 )
 from app.company import Company  # noqa: E402
+from app.config import load_settings  # noqa: E402
 from app.db import Base, scope_to_company  # noqa: E402
 from app.integrations import (  # noqa: E402
     ENDPOINTS_SETTING,
@@ -103,6 +112,20 @@ DAY = "2026-09-17"
 # sweep's blind spot rather than a place to hide a route.
 PUBLIC = {
     "/api/v1/health": "a liveness probe: it answers whether the process is up, nothing else",
+    "/api/v1/ready": (
+        "a readiness probe, asked by the load balancer before it sends traffic (T-8.OBS.01):"
+        " it names what is not ready and never why, and the reason is in the log"
+    ),
+    "/api/v1/metrics": (
+        "the counters the host's scraper reads (T-8.OBS.01): route templates, status classes"
+        " and volumes — nothing a caller sent — and the review records what an open scrape"
+        " exposes as an accepted risk at the edge"
+    ),
+    "/api/v1/auth/login": (
+        "the route that mints a session (T-7.AUTH.04): there is none to check when it is"
+        " called, and every refusal it makes is the same uninformative answer, so it cannot be"
+        " used to tell a wrong password from a login that does not exist"
+    ),
     "/api/v1/openapi.json": "the contract the frontend pins; the same document is published",
     "/openapi.json": "the same contract, as FastAPI's own path",
     "/docs": "the generated reference for that public contract",
@@ -127,6 +150,24 @@ GUARDED_ELSEWHERE = {
         " (T-6.ANALYTICS.01): a caller holding nothing is shown no tile at all, and each is"
         " named with the refusal, so the request has no single capability to ask for"
     ),
+}
+
+# The routes that carry no capability because they **are** the session boundary
+# (T-7.AUTH.04): signing in, reading the session you hold, signing out, changing your own
+# password, switching company, and the second factor. `require(...)` has nothing to ask for
+# here — the permission is "hold a valid session", which is `context`'s own dependency, not a
+# capability a role can hold. Naming them is not enough, so item 8 of this check **drives**
+# every one with no cookie and with a forged cookie and requires `401 unauthenticated`: the
+# only routes on this app that a caller may reach by holding nothing at all are the ones in
+# PUBLIC above.
+SESSION_ONLY = {
+    ("GET", "/api/v1/auth/session"),
+    ("POST", "/api/v1/auth/logout"),
+    ("POST", "/api/v1/auth/password"),
+    ("POST", "/api/v1/auth/company"),
+    ("POST", "/api/v1/auth/mfa/enrol"),
+    ("POST", "/api/v1/auth/mfa/confirm"),
+    ("POST", "/api/v1/auth/mfa/verify"),
 }
 
 
@@ -226,10 +267,16 @@ def main() -> int:
         if capability == ""
         and path not in PUBLIC
         and f"{method} {path}" not in GUARDED_ELSEWHERE
+        and (method, path) not in SESSION_ONLY
     ]
     assert unguarded == [], f"routes with no permission check: {unguarded}"
     assert set(GUARDED_ELSEWHERE) <= {f"{method} {path}" for path, method, _n, _c in routes}, (
         "the review's table of routes somebody else guards names a route the app does not serve"
+    )
+    served_pairs = {(method, path) for path, method, _n, _c in routes}
+    assert SESSION_ONLY <= served_pairs, (
+        "the session boundary's own routes name a route the app does not serve:"
+        f" {sorted(SESSION_ONLY - served_pairs)}"
     )
     for path, _method, _name, capability in routes:
         if path in PUBLIC:
@@ -330,8 +377,8 @@ def main() -> int:
         session.commit()
 
     client = TestClient(app, raise_server_exceptions=False)
-    headers = {"X-Company-Id": str(company_id), "X-Actor": "tina"}
-    elsewhere = {"X-Company-Id": str(other_company), "X-Actor": "tina"}
+    headers = sign_in(engine, company_id=company_id, actor="tina")
+    elsewhere = sign_in(engine, company_id=other_company, actor="tina")
     body = {
         "posting_date": DAY,
         "currency": "PHP",
@@ -347,7 +394,10 @@ def main() -> int:
     assert posted.status_code == 201, posted.text
 
     # 3 — the field levels, on read and on write
-    hidden = client.get(f"{BASE}/journal-entries", headers={**headers, "X-Actor": "omar"})
+    hidden = client.get(
+        f"{BASE}/journal-entries",
+        headers=sign_in(engine, company_id=company_id, actor="omar"),
+    )
     assert hidden.status_code == 200, hidden.text
     line = hidden.json()["items"][0]["lines"][0]
     assert "party" not in line, f"a restricted field reached the payload: {line}"
@@ -416,8 +466,13 @@ def main() -> int:
 
     # 5 — a configured credential reaches the platform and nothing else
     token = "secret-token-9f3a"
-    os.environ[ENDPOINTS_SETTING] = json.dumps(
-        {"email": {"url": "https://mail.example.invalid", "token": token}}
+    settings = load_settings(
+        {
+            **os.environ,
+            ENDPOINTS_SETTING: json.dumps(
+                {"email": {"url": "https://mail.example.invalid", "token": token}}
+            ),
+        }
     )
     sent: list[str] = []
     register_transport("email", lambda destination, payload: sent.append(destination))
@@ -426,7 +481,9 @@ def main() -> int:
         send_outbound(session, company_id=company_id, channel="email",
                       destination="buyer@example.invalid", payload={"subject": "hello"})
         rows = deliveries_for(session, company_id=company_id, channel="email")
-        assert token in endpoint_for("email")["token"], "the platform lost its own credential"
+        assert token in endpoint_for("email", settings=settings)["token"], (
+            "the platform lost its own credential"
+        )
         assert rows, "the delivery was not logged"
         for row in rows:
             assert token not in json.dumps(row.payload), "a credential reached the log"
@@ -467,7 +524,10 @@ def main() -> int:
         grant(session, poster, "journal.post")
         assign(session, company_id=company_id, subject="peter", role=poster)
         session.commit()
-    elsewhere_caller = {**key_headers, "X-Actor": "peter"}
+    elsewhere_caller = {
+        **sign_in(engine, company_id=company_id, actor="peter"),
+        "Idempotency-Key": "review-key",
+    }
     taken = client.post(f"{BASE}/journal-entries", headers=elsewhere_caller, json=key_body)
     assert taken.status_code == 409, f"another caller replayed a stored document: {taken.text}"
     assert taken.json()["error"]["code"] == "idempotency_key_reused", taken.json()
@@ -544,7 +604,7 @@ def main() -> int:
             },
         ),
     ]
-    outsider = {"X-Company-Id": str(company_id), "X-Actor": "nobody"}
+    outsider = sign_in(engine, company_id=company_id, actor="nobody")
     driven = 0
     for method, path, payload in portal_calls:
         refused_here = client.request(method, path, headers=outsider, json=payload)
@@ -555,7 +615,7 @@ def main() -> int:
         assert "portal.supplier" in refused_here.json()["error"]["message"], refused_here.json()
         driven += 1
     served = client.get(
-        f"{BASE}/portal/documents", headers={"X-Company-Id": str(company_id), "X-Actor": "sup-a.portal"}
+        f"{BASE}/portal/documents", headers=sign_in(engine, company_id=company_id, actor="sup-a.portal")
     )
     assert served.status_code == 200, served.text
     assert [row["number"] for row in served.json()["documents"]["rfqs"]] == ["RFQ-R"], served.json()
@@ -590,14 +650,42 @@ def main() -> int:
         f" and the report ran ({ran.json()['status']}) past the framework's own check"
     )
 
-    # 8 — the findings are recorded with a disposition
+    # 8 — the session boundary itself, driven with nothing
+    #
+    # T-7.AUTH.04's routes carry no capability because there is no capability to carry: they
+    # are the door. So each is called with **no cookie** and with a cookie that names no
+    # session, and must answer 401 in the one error shape — the blind spot named in
+    # SESSION_ONLY, with the request that proves it behind the naming.
+    anonymous = TestClient(app, raise_server_exceptions=False)
+    for method, path in sorted(SESSION_ONLY):
+        payload = {} if method == "POST" else None
+        nothing = anonymous.request(method, path, json=payload)
+        assert nothing.status_code == 401, (
+            f"{method} {path} answered {nothing.status_code} with no session:"
+            f" {nothing.text[:120]}"
+        )
+        assert nothing.json()["error"]["code"] == "unauthenticated", nothing.json()
+        forged = anonymous.request(
+            method, path, json=payload, headers={"Cookie": "erpv1_session=not-a-session"}
+        )
+        assert forged.status_code == 401, (
+            f"{method} {path} answered {forged.status_code} to a forged cookie:"
+            f" {forged.text[:120]}"
+        )
+    print(
+        f"8. the {len(SESSION_ONLY)} routes that carry no capability because they *are* the"
+        " session boundary were driven with no cookie and with a forged one: every one answered"
+        " 401 unauthenticated, so a session cannot be claimed — only held"
+    )
+
+    # 9 — the findings are recorded with a disposition
     findings = re.findall(r"^\| ([^|]+) \| (remediated|accepted risk) \| ([^|]+) \|$", review,
                           flags=re.MULTILINE)
     assert len(findings) >= 3, f"the review records {len(findings)} findings"
     for what, disposition, why in findings:
         assert len(why.strip()) > 40, f"{what} is disposed of without a reason: {why}"
     print(
-        f"8. {len(findings)} findings recorded, each stating `remediated` or `accepted risk`"
+        f"9. {len(findings)} findings recorded, each stating `remediated` or `accepted risk`"
         f" with the reason — {sorted({f[1] for f in findings})}"
     )
 

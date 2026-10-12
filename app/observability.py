@@ -73,6 +73,10 @@ REQUEST_ID: ContextVar[str] = ContextVar("erp_request_id", default="")
 
 REQUEST_ID_HEADER = "X-Request-Id"
 
+# Where the middleware parks the correlation id for the one handler that runs *outside*
+# it (see `carried_request_id`).
+REQUEST_ID_STATE = "erp_request_id"
+
 # What a client may put in X-Request-Id: no whitespace, no control characters, no
 # quotes, and short. Anything else is replaced rather than logged (see the module
 # docstring: a log line must not be forgeable by whoever sends the header).
@@ -335,6 +339,23 @@ class RequestContext:
         started = time.perf_counter()
         status = 500
         failed = False
+def carried_request_id(request) -> str:
+    """The correlation id a request is already logged under, for a handler outside the middleware.
+
+    The handler for an *unhandled* exception is registered on Starlette's
+    `ServerErrorMiddleware`, which wraps the user middleware stack — so it runs after
+    :class:`RequestContext` has reset the ContextVar on its way out, and the id would read as
+    empty by the time the body is built. The middleware therefore parks the id on the request's
+    scope as well, and this reads it back: the id in the body is the id in the log line, which
+    is the whole point of having one.
+
+    Tolerates no request at all, because the handler is also called directly (a check driving
+    the shape).
+    """
+    state = (getattr(request, "scope", None) or {}).get("state") or {}
+    return state.get(REQUEST_ID_STATE) or REQUEST_ID.get() or "-"
+
+
 
         async def send_with_id(message) -> None:
             nonlocal status
@@ -357,8 +378,20 @@ class RequestContext:
             # handler answer at all.
             failed = True
             log("error", "request failed with an unhandled exception", method=request.method)
-            logging.getLogger("erp").exception("unhandled exception serving %s", _route_label(scope))
+            # The traceback line carries the id too — it is the line an operator actually
+            # needs to find, and "the id is in every line the request produces" is otherwise
+            # untrue for this one. The id comes from the local rather than the ContextVar:
+            # this block runs before the `finally` that resets it, but the local is the one
+            # the response and the request line are already using.
+            logging.getLogger("erp").exception(
+                "unhandled exception serving %s",
+                _route_label(scope),
+                extra={"erp_request_id": request_id},
+            )
             raise
+        # Parked on the scope as well as in the ContextVar: the handler for an unhandled
+        # exception runs outside this middleware and cannot see a ContextVar this resets.
+        scope.setdefault("state", {})[REQUEST_ID_STATE] = request_id
         finally:
             duration = time.perf_counter() - started
             METRICS.inc(IN_FLIGHT, value=-1)

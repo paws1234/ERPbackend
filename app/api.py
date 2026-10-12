@@ -1235,7 +1235,7 @@ async def _unexpected(_request: Request, exc: Exception) -> JSONResponse:
     report. `tests/check_error_hygiene.py` drives a forced failure and requires that no
     exception class, message, path or SQL appears in the body.
     """
-    request_id = observability.REQUEST_ID.get() or "-"
+    request_id = observability.carried_request_id(_request)
     logging.getLogger("erp").error(
         "unhandled exception: %s", type(exc).__name__, exc_info=exc, extra={"erp_request_id": request_id}
     )

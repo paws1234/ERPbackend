@@ -85,6 +85,12 @@ from app.observability import METRICS, log
 RUNNING, SUCCEEDED, FAILED, SKIPPED = "running", "succeeded", "failed", "skipped"
 RUN_STATUSES = (RUNNING, SUCCEEDED, FAILED, SKIPPED)
 
+# The worker's own counter, declared here because this is where it is counting: a run that
+# ends, by job and outcome. Declared rather than incremented bare — `Registry.inc` refuses a
+# name nobody declared, because an undeclared counter is counted and never scraped.
+JOB_RUNS = "erp_job_runs_total"
+METRICS.declare(JOB_RUNS, "counter", "Job runs that reached an outcome, by job and status.")
+
 # The names of pgqueuer's own tables, as the library states them. Kept here because
 # `migrations/env.py` must exclude them from autogenerate and `tests/check_bootstrap.py`
 # must allow them when it counts the tables an install leaves behind.
@@ -284,7 +290,7 @@ def run_job(
                 ),
             )
             log("error", "job failed", job=name, attempt=attempt, error=type(exc).__name__)
-            METRICS.inc("erp_job_runs_total", {"job": name, "status": FAILED})
+            METRICS.inc(JOB_RUNS, {"job": name, "status": FAILED})
             if not retrying:
                 return _fresh(session, run)
             pause(_backoff(attempt) * 60)
@@ -299,7 +305,7 @@ def run_job(
             session.rollback()
             return _record(session, job=name, key=key, status=SKIPPED, attempt=attempt)
         log("info", "job succeeded", job=name, attempt=attempt, duration_ms=duration_ms)
-        METRICS.inc("erp_job_runs_total", {"job": name, "status": SUCCEEDED})
+        METRICS.inc(JOB_RUNS, {"job": name, "status": SUCCEEDED})
         return _fresh(session, run)
 
     assert run is not None  # max_attempts >= 1, so the loop ran at least once

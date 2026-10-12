@@ -1239,7 +1239,7 @@ async def _unexpected(_request: Request, exc: Exception) -> JSONResponse:
     logging.getLogger("erp").error(
         "unhandled exception: %s", type(exc).__name__, exc_info=exc, extra={"erp_request_id": request_id}
     )
-    observability.METRICS.inc("erp_errors_total", {"kind": "unhandled"})
+    observability.METRICS.inc(observability.ERRORS, {"kind": "unhandled"})
     return JSONResponse(
         status_code=500,
         content={

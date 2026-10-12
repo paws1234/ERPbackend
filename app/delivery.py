@@ -74,6 +74,7 @@ from app.integrations import (
     FAILED,
     SENT,
     OutboundDelivery,
+    UnconfiguredChannel,
     register_transport,
     send_outbound,
 )
@@ -234,9 +235,11 @@ def deliver(
     schedule's. A caller that wants the send to be visible in the same transaction gets the
     delivery row (and its attempt) back.
 
-    Raises :class:`~app.integrations.UnconfiguredChannel` when nobody configured the
-    channel: that is a deployment fact, and a caller must not be able to mistake it for a
-    transport failure.
+    An unconfigured channel **does not raise from here**: §4b Phase 8's exit criterion 8 is
+    *"without it, the attempt is recorded — never a `500`"*, so nobody having configured the
+    channel is a `failed` delivery, with its attempt and the reason on the record. A caller
+    that wants the refusal itself asks the boundary directly
+    (:class:`~app.integrations.UnconfiguredChannel`, still raised by `send_outbound`).
     """
     settings = SETTINGS
 
@@ -260,16 +263,47 @@ def deliver(
         session.commit()
         scope_to_company(session, company_id)
 
-    return send_outbound(
-        session,
-        company_id=company_id,
-        channel=channel,
-        destination=destination,
-        payload=payload,
-        max_attempts=1,
-        delivery=delivery,
-        on_attempt=record,
-    )
+    try:
+        return send_outbound(
+            session,
+            company_id=company_id,
+            channel=channel,
+            destination=destination,
+            payload=payload,
+            max_attempts=1,
+            delivery=delivery,
+            on_attempt=record,
+        )
+    except UnconfiguredChannel as exc:
+        # The boundary refuses *before* it writes a row (T-0.INT.01's contract, which
+        # `app/ar/dunning.py` relies on), so the delivery row is made here: without one
+        # there is nothing for the attempt to hang on, and an attempt nobody recorded is
+        # exactly the "lost silently" this task exists to refuse.
+        #
+        # ponytail: the row is constructed in two places — here and in `send_outbound` —
+        # because the refusal happens before the boundary's own row exists. Ceiling: one
+        # duplicated constructor call, kept in step by this comment. Upgrade path: a
+        # `send_outbound(..., record_refusal=True)` flag the day a second caller needs it.
+        row = delivery
+        if row is None:
+            row = OutboundDelivery(
+                company_id=company_id,
+                channel=channel,
+                destination=str(destination),
+                payload=payload,
+                status=FAILED,
+                attempts=0,
+            )
+            session.add(row)
+        row.status = FAILED
+        row.destination = str(destination)
+        row.payload = payload
+        row.last_error = f"{type(exc).__name__}: {exc}"
+        row.attempts = row.attempts + 1
+        session.commit()
+        scope_to_company(session, company_id)
+        record(row, row.attempts, FAILED, row.last_error)
+        return row
 
 
 def attempts_for(session: Session, delivery: OutboundDelivery) -> list[DeliveryAttempt]:

@@ -73,6 +73,10 @@ REQUEST_ID: ContextVar[str] = ContextVar("erp_request_id", default="")
 
 REQUEST_ID_HEADER = "X-Request-Id"
 
+# Where the middleware parks the correlation id for the one handler that runs *outside*
+# it (see `carried_request_id`).
+REQUEST_ID_STATE = "erp_request_id"
+
 # What a client may put in X-Request-Id: no whitespace, no control characters, no
 # quotes, and short. Anything else is replaced rather than logged (see the module
 # docstring: a log line must not be forgeable by whoever sends the header).
@@ -83,8 +87,16 @@ REQUEST_DURATION = "erp_request_duration_seconds"
 IN_FLIGHT = "erp_requests_in_flight"
 READY = "erp_ready"
 BUILD_INFO = "erp_build_info"
+# Failures the platform had no shape for, by kind. Declared here like every other metric —
+# `Registry.inc` refuses a name nobody declared, because an undeclared counter is counted and
+# never scraped (which is what this one used to be).
+ERRORS = "erp_errors_total"
 
 _logging_configured = False
+
+
+class UnknownMetric(KeyError):
+    """A metric nobody declared — counting it would be invisible to whoever scrapes."""
 
 
 # --- The registry -------------------------------------------------------------
@@ -111,17 +123,36 @@ class Registry:
         self._types[name] = kind
         self._help[name] = help_text
 
+    def _declared(self, name: str) -> None:
+        """Refuse a metric nobody declared — `render` emits declared names and nothing else.
+
+        Without this, counting something undeclared is silent: the value is kept, never
+        scraped, and the operator is told a counter exists that `/metrics` does not carry.
+        It happened (`erp_errors_total`, the counter for a failure the platform had no shape
+        for, and the worker's `erp_job_runs_total`), which is why it is a refusal rather than
+        a note in a docstring.
+        """
+        if name not in self._types:
+            raise UnknownMetric(
+                f"{name!r} was never declared, so counting it would be invisible: declare it"
+                f" with `Registry.declare` beside the others (declared:"
+                f" {', '.join(sorted(self._types))})"
+            )
+
     def inc(self, name: str, labels: dict[str, str] | None = None, value: float = 1.0) -> None:
+        self._declared(name)
         key = (name, _labels(labels))
         with self._lock:
             self._series[key] = self._series.get(key, 0.0) + value
 
     def set(self, name: str, value: float, labels: dict[str, str] | None = None) -> None:
         """State a gauge's current value (a gauge is set, never accumulated)."""
+        self._declared(name)
         self._series[(name, _labels(labels))] = value
 
     def observe(self, name: str, value: float, labels: dict[str, str] | None = None) -> None:
         """Add one observation to a summary: its total and its count."""
+        self._declared(name)
         key = (name, _labels(labels))
         with self._lock:
             self._series[(f"{name}_sum", key[1])] = self._series.get((f"{name}_sum", key[1]), 0.0) + value
@@ -180,6 +211,7 @@ METRICS.declare(REQUEST_DURATION, "summary", "Time spent answering requests, in 
 METRICS.declare(IN_FLIGHT, "gauge", "Requests being answered right now.")
 METRICS.declare(READY, "gauge", "1 when the last readiness probe was ready, 0 otherwise.")
 METRICS.declare(BUILD_INFO, "gauge", "One series naming the contract version this instance serves.")
+METRICS.declare(ERRORS, "counter", "Failures the platform had no shape for, by kind.")
 
 
 # --- Logging ------------------------------------------------------------------
@@ -307,6 +339,23 @@ def request_id_of(request) -> str:
     return uuid.uuid4().hex
 
 
+def carried_request_id(request) -> str:
+    """The correlation id a request is already logged under, for a handler outside the middleware.
+
+    The handler for an *unhandled* exception is registered on Starlette's
+    `ServerErrorMiddleware`, which wraps the user middleware stack — so it runs after
+    :class:`RequestContext` has reset the ContextVar on its way out, and the id would read as
+    empty by the time the body is built. The middleware therefore parks the id on the request's
+    scope as well, and this reads it back: the id in the body is the id in the log line, which
+    is the whole point of having one.
+
+    Tolerates no request at all, because the handler is also called directly (a check driving
+    the shape).
+    """
+    state = (getattr(request, "scope", None) or {}).get("state") or {}
+    return state.get(REQUEST_ID_STATE) or REQUEST_ID.get() or "-"
+
+
 # --- The request middleware ---------------------------------------------------
 
 
@@ -331,6 +380,9 @@ class RequestContext:
 
         request = Request(scope, receive)
         request_id = request_id_of(request)
+        # Parked on the scope as well as in the ContextVar: the handler for an unhandled
+        # exception runs outside this middleware and cannot see a ContextVar this resets.
+        scope.setdefault("state", {})[REQUEST_ID_STATE] = request_id
         token = REQUEST_ID.set(request_id)
         started = time.perf_counter()
         status = 500
@@ -357,7 +409,16 @@ class RequestContext:
             # handler answer at all.
             failed = True
             log("error", "request failed with an unhandled exception", method=request.method)
-            logging.getLogger("erp").exception("unhandled exception serving %s", _route_label(scope))
+            # The traceback line carries the id too — it is the line an operator actually
+            # needs to find, and "the id is in every line the request produces" is otherwise
+            # untrue for this one. The id comes from the local rather than the ContextVar:
+            # this block runs before the `finally` that resets it, but the local is the one
+            # the response and the request line are already using.
+            logging.getLogger("erp").exception(
+                "unhandled exception serving %s",
+                _route_label(scope),
+                extra={"erp_request_id": request_id},
+            )
             raise
         finally:
             duration = time.perf_counter() - started

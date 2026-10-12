@@ -78,6 +78,7 @@ from app.api import (  # noqa: E402
     app,
 )
 from app.company import Company  # noqa: E402
+from app.config import load_settings  # noqa: E402
 from app.db import Base, scope_to_company  # noqa: E402
 from app.integrations import (  # noqa: E402
     ENDPOINTS_SETTING,
@@ -465,8 +466,13 @@ def main() -> int:
 
     # 5 — a configured credential reaches the platform and nothing else
     token = "secret-token-9f3a"
-    os.environ[ENDPOINTS_SETTING] = json.dumps(
-        {"email": {"url": "https://mail.example.invalid", "token": token}}
+    settings = load_settings(
+        {
+            **os.environ,
+            ENDPOINTS_SETTING: json.dumps(
+                {"email": {"url": "https://mail.example.invalid", "token": token}}
+            ),
+        }
     )
     sent: list[str] = []
     register_transport("email", lambda destination, payload: sent.append(destination))
@@ -475,7 +481,9 @@ def main() -> int:
         send_outbound(session, company_id=company_id, channel="email",
                       destination="buyer@example.invalid", payload={"subject": "hello"})
         rows = deliveries_for(session, company_id=company_id, channel="email")
-        assert token in endpoint_for("email")["token"], "the platform lost its own credential"
+        assert token in endpoint_for("email", settings=settings)["token"], (
+            "the platform lost its own credential"
+        )
         assert rows, "the delivery was not logged"
         for row in rows:
             assert token not in json.dumps(row.payload), "a credential reached the log"

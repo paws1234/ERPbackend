@@ -30,6 +30,12 @@ value that can change under a running process is a value two parts of the proces
 disagree about. A change is a restart. T-9.SECRETS.01 adds the envelope encryption and
 rotation story; this module only guarantees the values came from the environment.
 
+**The two §9 values with no decided value.** ``fx_rate_source`` (§9: *"Not stated"* — the
+provider adapter is Phase 11's) and ``integration_endpoints`` (§9: *"Configured per tenant"*)
+are declared here, with the shape a stated value must have, and read once like every other
+setting. Their *values* are left to the phases that adopt them, so an unset one is ``None``
+and the module that needs it refuses where it is used rather than inventing a default.
+
 **The identity settings live here too.** They were read at import in
 :mod:`app.identity` with the note that "T-8.CFG.01 (app/config.py) is where they are
 declared once and validated at startup" — so they moved here rather than being
@@ -39,6 +45,7 @@ always used.
 
 from __future__ import annotations
 
+import json
 import os
 from collections.abc import Mapping
 from dataclasses import dataclass, fields
@@ -76,6 +83,10 @@ LOCKOUT_THRESHOLD = "LOCKOUT_THRESHOLD"
 LOCKOUT_WINDOW_MINUTES = "LOCKOUT_WINDOW_MINUTES"
 MFA_REQUIRED_ROLES = "MFA_REQUIRED_ROLES"
 RECOVERY_CODE_COUNT = "RECOVERY_CODE_COUNT"
+# §9's two variables whose *value* the plan leaves to the phase that owns them — but which a
+# module needs today, so they are declared here rather than read where they are used.
+FX_RATE_SOURCE = "FX_RATE_SOURCE"
+INTEGRATION_ENDPOINTS = "INTEGRATION_ENDPOINTS"
 
 LOG_LEVELS = ("debug", "info", "warning", "error")
 LOG_FORMATS = ("json", "text")
@@ -232,6 +243,41 @@ def _problems(environ: Mapping[str, str]) -> tuple[list[str], dict[str, object]]
     roles = tuple(part.strip() for part in str(raw_roles).split(",") if part.strip())
     values[MFA_REQUIRED_ROLES.lower()] = roles
 
+    # --- §9 values the phase that owns them has not decided yet ----------------
+    # Both are read by the module that needs them, and both are declared here for the reason
+    # every other setting is: "what is configurable" is one file. What is *not* decided here is
+    # either value — §9 defers `fx_rate_source` to the provider adapter of Phase 11
+    # (T-11.FX.01) and states `integration_endpoints` as per-tenant — so a deployment that has
+    # not stated them gets None, and the module that needs one says so where it is used
+    # (`app/ledger/currency.py` refuses a sync with no source; `app/integrations.py` refuses a
+    # channel with no endpoint). What *is* decided here is the shape: stated but unreadable is a
+    # misconfigured deployment, which refuses to start rather than at the first send.
+    text(FX_RATE_SOURCE)
+
+    # The shape is validated here, once, rather than at the first send: §9 leaves this one
+    # "Configured per tenant" (it is not a platform setting), so what is decided here is that a
+    # *stated* value must be an object of channels — a deployment that states nonsense refuses
+    # to start rather than failing when a message is sent.
+    # ponytail: per-tenant in the plan, read here as one deployment-wide value. Ceiling: one
+    # installation, one boundary configuration. Upgrade path: the phase that owns tenant
+    # configuration reads the per-tenant value and leaves only the shape described here.
+    raw_endpoints = environ.get(INTEGRATION_ENDPOINTS)
+    if raw_endpoints is None or str(raw_endpoints).strip() == "":
+        values[INTEGRATION_ENDPOINTS.lower()] = None
+    else:
+        try:
+            endpoints = json.loads(str(raw_endpoints))
+        except json.JSONDecodeError as exc:
+            problems.append(f"{INTEGRATION_ENDPOINTS} is not valid JSON: {exc}")
+        else:
+            if not isinstance(endpoints, dict):
+                problems.append(
+                    f"{INTEGRATION_ENDPOINTS} is a {type(endpoints).__name__}, not an object"
+                    ' of channel to endpoint (for example {"email": {"url": "…"}})'
+                )
+            else:
+                values[INTEGRATION_ENDPOINTS.lower()] = endpoints
+
     if (
         isinstance(values.get(DELIVERY_BACKOFF_MINUTES.lower()), int)
         and isinstance(values.get(DELIVERY_BACKOFF_MAX_MINUTES.lower()), int)
@@ -278,6 +324,9 @@ class Settings:
     lockout_window_minutes: int
     mfa_required_roles: tuple[str, ...]
     recovery_code_count: int
+    # §9's two not-yet-decided values (see `_problems`): read once, like everything else.
+    fx_rate_source: str | None
+    integration_endpoints: dict[str, dict] | None
 
     @property
     def dsn(self) -> str:
@@ -340,7 +389,7 @@ def describe() -> dict[str, object]:
     is not in the log, because a log is not a secret store (principle 7, and Phase 8's
     "a credential never appears in it").
     """
-    redacted = {"smtp_password", "sms_gateway_token"}
+    redacted = {"smtp_password", "sms_gateway_token", "integration_endpoints"}
     described: dict[str, object] = {}
     for field in fields(Settings):
         value = getattr(SETTINGS, field.name)

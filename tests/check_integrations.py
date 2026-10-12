@@ -34,6 +34,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from app.audit import read_trail  # noqa: E402
 from app.company import Company  # noqa: E402
+from app.config import load_settings  # noqa: E402
 from app.db import Base, scope_to_company  # noqa: E402
 from app.integrations import (  # noqa: E402
     ENDPOINTS_SETTING,
@@ -64,14 +65,19 @@ def main() -> int:
         print("DATABASE_URL is required (a scratch Postgres)", file=sys.stderr)
         return 2
 
-    # 3 — credentials arrive from the environment
-    os.environ[ENDPOINTS_SETTING] = json.dumps(
-        {"email": {"url": "smtp://relay.internal:25", "token": TOKEN}}
+    # 3 — credentials arrive from the configuration, which reads the environment once, at start
+    settings = load_settings(
+        {
+            **os.environ,
+            ENDPOINTS_SETTING: json.dumps(
+                {"email": {"url": "smtp://relay.internal:25", "token": TOKEN}}
+            ),
+        }
     )
-    assert endpoint_for("email")["token"] == TOKEN
-    assert endpoint_for("email")["url"] == "smtp://relay.internal:25"
+    assert endpoint_for("email", settings=settings)["token"] == TOKEN
+    assert endpoint_for("email", settings=settings)["url"] == "smtp://relay.internal:25"
     try:
-        endpoint_for("biometric")
+        endpoint_for("biometric", settings=settings)
     except UnconfiguredChannel as exc:
         assert ENDPOINTS_SETTING in str(exc), f"unclear error: {exc}"
     else:
